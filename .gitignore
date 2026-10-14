@@ -1,0 +1,49 @@
+# Maven build output
+target/
+
+# Maven Wrapper downloads and temporary files
+.mvn/wrapper/maven-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# Visual Studio Code
+.vscode/
+
+# Java tooling
+*.class
+*.log
+hs_err_pid*
+replay_pid*
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Local application data, databases, secrets, and exports
+.data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+secrets.properties
+*.local.properties
+
+# Generated installers and runtime images
+dist/
+installer/
+runtime/
+
+# Local tooling downloaded during development
+.tools/
+
