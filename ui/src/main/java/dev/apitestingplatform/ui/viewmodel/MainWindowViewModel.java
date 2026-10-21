@@ -8,8 +8,7 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 
 /**
- * Presentation state for the main window. Application use cases will update this model
- * when request execution is implemented.
+ * Main-window operation and response metadata. Request-specific drafts live in RequestEditorViewModel.
  */
 public final class MainWindowViewModel {
     private final StringProperty requestUrl = new SimpleStringProperty("");

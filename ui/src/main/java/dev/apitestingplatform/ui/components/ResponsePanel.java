@@ -1,6 +1,7 @@
 package dev.apitestingplatform.ui.components;
 
 import dev.apitestingplatform.domain.http.ExecutionResult;
+import dev.apitestingplatform.domain.http.HttpStatus;
 import dev.apitestingplatform.ui.response.*;
 import dev.apitestingplatform.ui.viewmodel.MainWindowViewModel;
 import javafx.application.Platform;
@@ -45,7 +46,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     private final ProgressIndicator progress = new ProgressIndicator();
     private final Button previousPage = new Button("Previous page");
     private final Button nextPage = new Button("Next page");
-    private final Button save = new Button("Save body…");
+    private final Button save = new Button("Save Response…");
     private final TableView<ResponsePresentation.HeaderRow> headers = table("No response headers");
     private final TableView<ResponsePresentation.CookieRow> cookies = table("No response cookies");
     private final TableView<ResponseTestResult> tests = table("No assertions configured for this response");
@@ -174,6 +175,12 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         setState(ResponseState.LOADING, "Sending request…");
     }
 
+    public void showValidationFailure(String message) {
+        requireFxThread();
+        clear();
+        setState(ResponseState.EMPTY, message);
+    }
+
     public void showResponse(ExecutionResult result) {
         if (!Platform.isFxApplicationThread()) { Platform.runLater(() -> showResponse(result)); return; }
         if (closed) return;
@@ -181,7 +188,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         response = result;
         long version = revision;
         setState(ResponseState.LOADING, "Preparing response…");
-        viewModel.responseStatusProperty().set(result.statusCode() == 0 ? "—" : Integer.toString(result.statusCode()));
+        viewModel.responseStatusProperty().set(result.statusCode() == 0 ? "—" : HttpStatus.label(result.statusCode()));
         viewModel.responseTimeProperty().set(result.durationMillis() + " ms");
         viewModel.responseSizeProperty().set(result.sizeBytes() + " bytes" + (result.bodyTruncated() ? " (captured)" : ""));
         try {
@@ -207,6 +214,10 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
                             case SUCCESS -> result.sizeBytes() == 0 ? "Response received — body is empty" : "Response received";
                             case HTTP_ERROR -> "HTTP error " + result.statusCode() + " — response body is available below";
                             case RESPONSE_TOO_LARGE -> "Response too large — captured prefix available below";
+                            case DNS_ERROR -> "DNS error — " + result.error().orElseThrow().message();
+                            case TLS_ERROR -> "TLS error — " + result.error().orElseThrow().message();
+                            case CONNECTION_ERROR -> "Connection refused — " + result.error().orElseThrow().message();
+                            case REDIRECT_ERROR -> "Redirect error — " + result.error().orElseThrow().message();
                             default -> result.error().map(error -> error.message()).orElse("Response received");
                         };
                         setState(finalState, message);

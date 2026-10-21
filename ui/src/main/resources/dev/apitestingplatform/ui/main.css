@@ -341,3 +341,13 @@
 .response-code .paragraph-text .json-punctuation { -fx-fill: #68738b; }
 .response-table { -fx-background-color: #fff; -fx-border-color: #e2e4eb; }
 .response-table .column-header { -fx-background-color: #f5f6fa; }
+.field-editor { -fx-padding: 10px 12px; -fx-background-color: #fff; }
+.field-editor .table-cell { -fx-padding: 4px; -fx-alignment: CENTER-LEFT; }
+.field-editor .text-field { -fx-padding: 5px 7px; }
+.request-body-text { -fx-font-family: "Consolas", monospace; -fx-font-size: 13px; }
+.validation-error { -fx-text-fill: #ba3040; -fx-padding: 3px 8px; }
+.validation-error .text { -fx-fill: #ba3040; }
+.state-dns_error, .state-tls_error, .state-connection_error, .state-redirect_error { -fx-text-fill: #ba3040; }
+.state-cancelled { -fx-text-fill: #647087; }
+.library-sidebar { -fx-padding: 12px; -fx-background-color: #f7f8fb; }
+.library-toolbar { -fx-padding: 10px 12px; -fx-background-color: #fff; }

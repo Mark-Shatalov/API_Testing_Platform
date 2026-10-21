@@ -2,6 +2,7 @@ package dev.apitestingplatform.httpclient;
 
 import dev.apitestingplatform.application.http.HttpExecutionEngine;
 import dev.apitestingplatform.application.http.RequestExecution;
+import dev.apitestingplatform.application.http.RequestValidation;
 import dev.apitestingplatform.domain.http.*;
 
 import javax.net.ssl.SSLContext;
@@ -119,25 +120,23 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
 
         void start() {
             try {
-                if (configuration.body().content().length() > limits.maxRequestBodyBytes()) {
-                    fail(NetworkError.Type.RESOURCE_LIMIT);
-                    return;
-                }
-                byte[] body = configuration.body().content().getBytes(StandardCharsets.UTF_8);
-                if (body.length > limits.maxRequestBodyBytes()) {
-                    fail(NetworkError.Type.RESOURCE_LIMIT);
-                    return;
-                }
+                synchronized (this) { if (terminal) return; }
+                if (!RequestValidation.validate(configuration).isEmpty()) throw new IllegalArgumentException("Invalid request");
+                RequestBodyEncoder.Encoded body = RequestBodyEncoder.encode(configuration.body(), limits.maxRequestBodyBytes());
                 URI uri = requestUri(configuration);
                 send(uri, configuration.method(), body, false, false, 0);
+            } catch (RequestBodyEncoder.BodyLimitException error) {
+                fail(NetworkError.Type.RESOURCE_LIMIT);
             } catch (IllegalArgumentException error) {
+                fail(NetworkError.Type.INVALID_REQUEST);
+            } catch (java.io.IOException error) {
                 fail(NetworkError.Type.INVALID_REQUEST);
             } catch (RuntimeException error) {
                 fail(classify(error));
             }
         }
 
-        private synchronized void send(URI uri, HttpMethod method, byte[] body,
+        private synchronized void send(URI uri, HttpMethod method, RequestBodyEncoder.Encoded body,
                                        boolean stripCredentials, boolean dropBodyHeaders, int redirects) {
             if (terminal) return;
             try {
@@ -152,22 +151,22 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
                         .timeout(java.time.Duration.ofNanos(remaining))
                         .version(configuration.protocol() == HttpProtocol.HTTP_2
                                 ? HttpClient.Version.HTTP_2 : HttpClient.Version.HTTP_1_1)
-                        .method(method.name(), body.length == 0
-                                ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+                        .method(method.name(), body.publisher());
                 for (RequestField header : configuration.headers()) {
+                    if (!header.enabled()) continue;
                     if (stripCredentials && sensitive(header.name())) continue;
                     if (dropBodyHeaders && bodyHeader(header.name())) continue;
                     builder.header(header.name(), header.value());
                 }
                 if (!stripCredentials && !configuration.cookies().isEmpty()) {
                     String cookies = String.join("; ", configuration.cookies().stream()
+                            .filter(RequestField::enabled)
                             .map(JavaHttpExecutionEngine::cookie).toList());
-                    builder.header("Cookie", cookies);
+                    if (!cookies.isEmpty()) builder.header("Cookie", cookies);
                 }
                 if (!dropBodyHeaders && configuration.body().type() != RequestBody.Type.NONE
-                        && configuration.headers().stream().noneMatch(h -> h.name().equalsIgnoreCase("Content-Type"))) {
-                    builder.header("Content-Type", configuration.body().type() == RequestBody.Type.JSON
-                            ? "application/json; charset=UTF-8" : "text/plain; charset=UTF-8");
+                        && configuration.headers().stream().noneMatch(h -> h.enabled() && h.name().equalsIgnoreCase("Content-Type"))) {
+                    builder.header("Content-Type", body.contentType());
                 }
                 transport = client.sendAsync(builder.build(), info -> {
                     responseInfo = info;
@@ -197,7 +196,7 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
                             }
                             boolean rewrite = (status == 303 && method != HttpMethod.HEAD)
                                     || ((status == 301 || status == 302) && method == HttpMethod.POST);
-                            send(target, rewrite ? HttpMethod.GET : method, rewrite ? new byte[0] : body,
+                            send(target, rewrite ? HttpMethod.GET : method, rewrite ? RequestBodyEncoder.Encoded.empty() : body,
                                     stripCredentials || !sameOrigin(uri, target), dropBodyHeaders || rewrite, redirects + 1);
                         } else complete(response);
                     } catch (IllegalArgumentException invalid) {
@@ -258,6 +257,7 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
             if (cause instanceof HttpTimeoutException || cause instanceof TimeoutException) return NetworkError.Type.TIMEOUT;
             if (cause instanceof CancellationException) return NetworkError.Type.CANCELLED;
             if (cause instanceof LimitedBodySubscriber.BodyTooLargeException) return NetworkError.Type.RESPONSE_TOO_LARGE;
+            if (cause instanceof RequestBodyEncoder.BodyLimitException) return NetworkError.Type.RESOURCE_LIMIT;
         }
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
             if (cause instanceof ConnectException) return NetworkError.Type.CONNECTION_REFUSED;
@@ -267,7 +267,7 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
 
     private static String message(NetworkError.Type type) {
         return switch (type) {
-            case INVALID_REQUEST -> "The URL, header, or cookie is invalid or unsupported.";
+            case INVALID_REQUEST -> "Invalid URL, header, cookie, body or upload file. Check the editor; upload files must be readable.";
             case DNS -> "The server name could not be resolved.";
             case CONNECTION_REFUSED -> "A connection to the server could not be established.";
             case TLS -> "The secure connection could not be verified or established.";
@@ -288,8 +288,9 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
         if (fragment >= 0) base = base.substring(0, fragment);
         if (!configuration.queryParameters().isEmpty()) {
             String query = String.join("&", configuration.queryParameters().stream()
+                    .filter(RequestField::enabled)
                     .map(p -> encode(p.name()) + "=" + encode(p.value())).toList());
-            base += (uri.getRawQuery() == null ? "?" : uri.getRawQuery().isEmpty() ? "" : "&") + query;
+            if (!query.isEmpty()) base += (uri.getRawQuery() == null ? "?" : uri.getRawQuery().isEmpty() ? "" : "&") + query;
         }
         return URI.create(base);
     }

@@ -22,10 +22,92 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class JavaHttpExecutionEngineTest {
+    @TempDir Path directory;
+
+    @Test void sendsUrlEncodedFormsAndIgnoresDisabledRowsEverywhere() throws Exception {
+        try (MockWebServer server = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
+            server.enqueue(new MockResponse().setBody("ok"));
+            var config = new RequestConfiguration(HttpMethod.POST, server.url("/form").toString(),
+                    List.of(new RequestField("q", "é space"), new RequestField("omit", "no", false)),
+                    List.of(new RequestField("X-Keep", "yes"), new RequestField("Bad\r\nHeader", "no", false)),
+                    List.of(new RequestField("sid", "abc"), new RequestField("bad cookie", "no", false)),
+                    RequestBody.form(List.of(new RequestField("name", "café + &"), new RequestField("tag", "one"),
+                            new RequestField("tag", "two"), new RequestField("", "omit", false))),
+                    Duration.ofSeconds(3), RedirectPolicy.NORMAL, HttpProtocol.HTTP_1_1);
+            assertThat(await(engine.execute(config)).statusCode()).isEqualTo(200);
+            var received = server.takeRequest(2, TimeUnit.SECONDS);
+            assertThat(received.getPath()).isEqualTo("/form?q=%C3%A9%20space");
+            assertThat(received.getHeader("X-Keep")).isEqualTo("yes");
+            assertThat(received.getHeader("Cookie")).isEqualTo("sid=abc");
+            assertThat(received.getHeader("Content-Type")).isEqualTo("application/x-www-form-urlencoded; charset=UTF-8");
+            assertThat(received.getBody().readUtf8()).isEqualTo("name=caf%C3%A9+%2B+%26&tag=one&tag=two");
+        }
+    }
+
+    @Test void streamsMultipartFilesAndReplaysTheExactBodyOn307() throws Exception {
+        Path upload = directory.resolve("upload.bin");
+        byte[] binary = {0, 1, (byte) 255, 42}; Files.write(upload, binary);
+        try (MockWebServer server = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
+            server.enqueue(new MockResponse().setResponseCode(307).addHeader("Location", "/next"));
+            server.enqueue(new MockResponse().setBody("ok"));
+            var body = RequestBody.multipart(List.of(MultipartPart.text("title", "café"),
+                    MultipartPart.file("upload", upload, "application/octet-stream"),
+                    new MultipartPart("ignored", "secret", java.util.Optional.empty(), "bad\r\ntype", false)));
+            assertThat(await(engine.execute(request(HttpMethod.POST, server.url("/upload").toString(), body,
+                    Duration.ofSeconds(3), RedirectPolicy.NORMAL, HttpProtocol.HTTP_1_1))).statusCode()).isEqualTo(200);
+            var first = server.takeRequest(2, TimeUnit.SECONDS); var second = server.takeRequest(2, TimeUnit.SECONDS);
+            String contentType = first.getHeader("Content-Type");
+            assertThat(contentType).startsWith("multipart/form-data; boundary=");
+            String boundary = contentType.substring(contentType.indexOf("boundary=") + 9);
+            byte[] bytes = first.getBody().readByteArray();
+            assertThat(second.getBody().readByteArray()).isEqualTo(bytes);
+            assertThat(first.getHeader("Content-Length")).isEqualTo(Integer.toString(bytes.length));
+            String wire = new String(bytes, StandardCharsets.ISO_8859_1);
+            assertThat(wire).contains("name=\"title\"", "name=\"upload\"; filename=\"upload.bin\"", "Content-Type: application/octet-stream")
+                    .doesNotContain("ignored", "secret").endsWith("--" + boundary + "--\r\n");
+            assertThat(wire).contains(new String(binary, StandardCharsets.ISO_8859_1));
+        }
+    }
+
+    @Test void rejectsInvalidJsonUnsafeMultipartAndMissingOrOversizedUploadsBeforeNetwork() throws Exception {
+        Path big = directory.resolve("big.bin"); Files.write(big, new byte[2048]);
+        try (MockWebServer server = new MockWebServer();
+             JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine(new EngineLimits(2, 2, 1024, 1024, 5))) {
+            for (RequestBody body : List.of(RequestBody.json("{bad}"),
+                    RequestBody.multipart(List.of(MultipartPart.text("bad\r\nname", "x"))),
+                    RequestBody.multipart(List.of(MultipartPart.file("file", directory.resolve("missing"), "application/octet-stream"))))) {
+                assertError(await(engine.execute(request(HttpMethod.POST, server.url("/").toString(), body,
+                        Duration.ofSeconds(3), RedirectPolicy.NORMAL, HttpProtocol.HTTP_1_1))), NetworkError.Type.INVALID_REQUEST);
+            }
+            assertError(await(engine.execute(request(HttpMethod.POST, server.url("/").toString(),
+                    RequestBody.multipart(List.of(MultipartPart.file("file", big, "application/octet-stream"))),
+                    Duration.ofSeconds(3), RedirectPolicy.NORMAL, HttpProtocol.HTTP_1_1))), NetworkError.Type.RESOURCE_LIMIT);
+            assertThat(server.getRequestCount()).isZero();
+        }
+    }
+
+    @Test void cancelsDuringChunkedBodyDownloadAndMeasuresCompleteDownloadDuration() throws Exception {
+        try (MockWebServer server = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
+            server.enqueue(new MockResponse().setChunkedBody("x".repeat(100), 10).throttleBody(10, 100, TimeUnit.MILLISECONDS));
+            var execution = engine.execute(RequestConfiguration.get(server.url("/cancel").toString()));
+            assertThat(server.takeRequest(2, TimeUnit.SECONDS)).isNotNull();
+            Thread.sleep(150);
+            assertThat(execution.result().toCompletableFuture().isDone()).isFalse();
+            assertThat(execution.cancel()).isTrue();
+            assertError(await(execution), NetworkError.Type.CANCELLED);
+            server.enqueue(new MockResponse().setChunkedBody("hello café", 2).setBodyDelay(180, TimeUnit.MILLISECONDS));
+            var completed = await(engine.execute(RequestConfiguration.get(server.url("/complete").toString())));
+            assertThat(completed.responseBody()).isEqualTo("hello café".getBytes(StandardCharsets.UTF_8));
+            assertThat(completed.durationMillis()).isGreaterThanOrEqualTo(150);
+        }
+    }
     private static RequestConfiguration request(HttpMethod method, String url, RequestBody body,
                                                  Duration timeout, RedirectPolicy redirects, HttpProtocol protocol) {
         return new RequestConfiguration(method, url, List.of(), List.of(), List.of(), body, timeout, redirects, protocol);

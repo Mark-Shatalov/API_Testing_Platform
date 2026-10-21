@@ -108,7 +108,7 @@ class ResponseViewerFxTest {
     @Test void supportsLoadingEveryFailureStateAndTestResultRows() throws Exception {
         fx(() -> { panel.showLoading(); assertThat(panel.stateProperty().get()).isEqualTo(ResponseState.LOADING); return null; });
         Map<NetworkError.Type, ResponseState> cases = Map.of(NetworkError.Type.TIMEOUT, ResponseState.TIMEOUT,
-                NetworkError.Type.CANCELLED, ResponseState.CANCELLED, NetworkError.Type.TLS, ResponseState.NETWORK_ERROR,
+                NetworkError.Type.CANCELLED, ResponseState.CANCELLED, NetworkError.Type.TLS, ResponseState.TLS_ERROR,
                 NetworkError.Type.RESPONSE_TOO_LARGE, ResponseState.RESPONSE_TOO_LARGE);
         for (var entry : cases.entrySet()) {
             fx(() -> { panel.showResponse(ResponsePresentationTest.result(0, new byte[0], Map.of(), entry.getKey())); return null; });
@@ -145,9 +145,11 @@ class ResponseViewerFxTest {
 
     @Test void mainWindowSendAndCancelUseInjectedEngineAndUpdateViewer() throws Exception {
         CompletableFuture<ExecutionResult> result = new CompletableFuture<>();
+        CountDownLatch sent = new CountDownLatch(1);
         HttpExecutionEngine engine = new HttpExecutionEngine() {
             @Override public RequestExecution execute(RequestConfiguration request) {
                 assertThat(request.url()).isEqualTo("http://localhost/test");
+                sent.countDown();
                 return new RequestExecution() {
                     @Override public CompletionStage<ExecutionResult> result() { return result; }
                     @Override public boolean cancel() {
@@ -164,10 +166,11 @@ class ResponseViewerFxTest {
             ((TextField) window.getScene().getRoot().lookup(".url-input")).setText("http://localhost/test");
             ((Button) window.getScene().getRoot().lookup(".send-button")).fire();
             assertThat(((Button) window.getScene().getRoot().lookup(".cancel-button")).isDisabled()).isFalse();
-            ((Button) window.getScene().getRoot().lookup(".cancel-button")).fire();
             return window;
         });
         try {
+            assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
+            fx(() -> { ((Button) main.getScene().getRoot().lookup(".cancel-button")).fire(); return null; });
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (System.nanoTime() < deadline) {
                 boolean cancelled = fx(() -> ((Label) main.getScene().getRoot().lookup("#response-state"))

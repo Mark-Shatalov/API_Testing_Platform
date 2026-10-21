@@ -54,7 +54,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>--enable-native-access=javafx.graphics</argLine>
+                    <argLine>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna --add-reads dev.apitestingplatform.app=org.fxmisc.richtext</argLine>
                 </configuration>
             </plugin>
             <plugin>
@@ -63,7 +63,7 @@
                 <configuration>
                     <mainClass>dev.apitestingplatform.app/dev.apitestingplatform.app.ApiTestingPlatformApplication</mainClass>
                     <options>
-                        <option>--enable-native-access=javafx.graphics</option>
+                        <option>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna</option>
                     </options>
                     <launcher>api-testing-platform</launcher>
                     <jlinkImageName>api-testing-platform-runtime</jlinkImageName>

@@ -10,6 +10,18 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.*;
 
 class RequestConfigurationTest {
+    @Test void structuredBodiesCopyListsAndRejectMixedModes() {
+        var fields = new ArrayList<RequestField>();
+        fields.add(new RequestField("key", "value", false));
+        RequestBody body = RequestBody.form(fields);
+        fields.clear();
+        assertThat(body.fields()).hasSize(1);
+        assertThat(body.fields().getFirst().enabled()).isFalse();
+        assertThatThrownBy(() -> body.fields().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> new RequestBody(RequestBody.Type.TEXT, "text", body.fields(), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
     @Test
     void executionResultCannotBeMutatedThroughOriginalOrReturnedContainers() {
         List<String> values = new ArrayList<>(List.of("value"));

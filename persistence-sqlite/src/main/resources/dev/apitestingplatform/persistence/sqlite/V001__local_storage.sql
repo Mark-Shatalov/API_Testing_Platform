@@ -1,0 +1,14 @@
+CREATE TABLE items(id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('WORKSPACE','COLLECTION','FOLDER','REQUEST')), parent_id TEXT REFERENCES items(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 200), position INTEGER NOT NULL CHECK(position >= 0), version INTEGER NOT NULL DEFAULT 0, modified_at TEXT NOT NULL);
+CREATE INDEX items_parent_order ON items(parent_id,position,id);
+CREATE TABLE workspaces(id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE);
+CREATE TABLE collections(id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE);
+CREATE TABLE folders(id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE);
+CREATE TABLE requests(id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE, folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE, payload_json TEXT NOT NULL);
+CREATE TABLE environments(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE TABLE variables(id TEXT PRIMARY KEY, environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE, name TEXT NOT NULL, value_json TEXT NOT NULL, secret INTEGER NOT NULL CHECK(secret IN (0,1)), modified_at TEXT NOT NULL, UNIQUE(environment_id,name));
+CREATE TABLE assertions(id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE, position INTEGER NOT NULL, config_json TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE TABLE runs(id TEXT PRIMARY KEY, workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL, status TEXT NOT NULL, config_json TEXT NOT NULL, started_at TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE TABLE request_results(id TEXT PRIMARY KEY, run_id TEXT REFERENCES runs(id) ON DELETE CASCADE, request_id TEXT REFERENCES requests(id) ON DELETE SET NULL, status_code INTEGER NOT NULL, duration_ms INTEGER NOT NULL, size_bytes INTEGER NOT NULL, metadata_json TEXT NOT NULL, started_at TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE TABLE assertion_results(id TEXT PRIMARY KEY, request_result_id TEXT NOT NULL REFERENCES request_results(id) ON DELETE CASCADE, assertion_id TEXT REFERENCES assertions(id) ON DELETE SET NULL, passed INTEGER NOT NULL CHECK(passed IN (0,1)), result_json TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE TABLE drafts(tab_id TEXT PRIMARY KEY, request_id TEXT, workspace_id TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, session_id TEXT NOT NULL, modified_at TEXT NOT NULL);
+CREATE INDEX drafts_session ON drafts(session_id,modified_at);

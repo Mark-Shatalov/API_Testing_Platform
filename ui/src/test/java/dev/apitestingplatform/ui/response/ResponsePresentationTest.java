@@ -82,7 +82,9 @@ class ResponsePresentationTest {
     @Test void mapsEveryResponseState() {
         assertThat(ResponseState.of(json("{}"))).isEqualTo(ResponseState.SUCCESS);
         assertThat(ResponseState.of(result(404, new byte[0], Map.of(), null))).isEqualTo(ResponseState.HTTP_ERROR);
-        Map<NetworkError.Type, ResponseState> states = Map.of(NetworkError.Type.TLS, ResponseState.NETWORK_ERROR,
+        Map<NetworkError.Type, ResponseState> states = Map.of(NetworkError.Type.TLS, ResponseState.TLS_ERROR,
+                NetworkError.Type.DNS, ResponseState.DNS_ERROR, NetworkError.Type.CONNECTION_REFUSED, ResponseState.CONNECTION_ERROR,
+                NetworkError.Type.REDIRECT_LIMIT, ResponseState.REDIRECT_ERROR,
                 NetworkError.Type.TIMEOUT, ResponseState.TIMEOUT, NetworkError.Type.CANCELLED, ResponseState.CANCELLED,
                 NetworkError.Type.RESPONSE_TOO_LARGE, ResponseState.RESPONSE_TOO_LARGE);
         states.forEach((error, state) -> assertThat(ResponseState.of(result(0, new byte[0], Map.of(), error))).isEqualTo(state));

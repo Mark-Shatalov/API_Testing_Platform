@@ -1,17 +1,16 @@
 package dev.apitestingplatform.ui.controller;
 
 import dev.apitestingplatform.ui.MainView;
-import dev.apitestingplatform.ui.components.EmptyStatePane;
 import dev.apitestingplatform.ui.components.RequestToolbar;
+import dev.apitestingplatform.ui.components.RequestEditor;
 import dev.apitestingplatform.ui.components.ResponsePanel;
 import dev.apitestingplatform.ui.components.WorkspaceSidebar;
 import dev.apitestingplatform.ui.viewmodel.MainWindowViewModel;
+import dev.apitestingplatform.ui.viewmodel.RequestEditorViewModel;
 import dev.apitestingplatform.application.http.HttpExecutionEngine;
 import dev.apitestingplatform.application.http.RequestExecution;
+import dev.apitestingplatform.application.http.RequestValidation;
 import dev.apitestingplatform.domain.http.RequestConfiguration;
-import dev.apitestingplatform.domain.http.HttpMethod;
-import dev.apitestingplatform.domain.http.HttpProtocol;
-import dev.apitestingplatform.domain.http.RedirectPolicy;
 import dev.apitestingplatform.domain.http.RequestBody;
 import javafx.application.Platform;
 import javafx.geometry.Orientation;
@@ -29,17 +28,29 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 
 import java.util.Objects;
+import java.util.concurrent.*;
+import dev.apitestingplatform.domain.http.ExecutionResult;
+import dev.apitestingplatform.domain.http.NetworkError;
 
-/** Handles presentation events without depending on application use cases. */
+/** Presentation orchestration: immutable submission snapshots and background validation/execution. */
 public final class MainWindowController implements AutoCloseable {
     private final MainWindowViewModel viewModel = new MainWindowViewModel();
+    private final RequestEditorViewModel draft = new RequestEditorViewModel(viewModel);
+    private final ThreadPoolExecutor validation = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1), Thread.ofPlatform().daemon().name("request-validate-", 0).factory(),
+            new ThreadPoolExecutor.AbortPolicy());
     private final HttpExecutionEngine engine;
+    private RequestEditor editor;
+    private Future<?> pendingValidation;
+    private long submission;
     private ResponsePanel responsePanel;
     private RequestExecution active;
     private boolean closed;
 
     public MainWindowController() { this(null); }
     public MainWindowController(HttpExecutionEngine engine) { this.engine = engine; }
+    public RequestEditorViewModel requestEditorModel() { return draft; }
+    public boolean hasUnsavedEdits() { return draft.dirtyProperty().get(); }
 
     public Parent createView() {
         WorkspaceSidebar sidebar = new WorkspaceSidebar();
@@ -83,22 +94,27 @@ public final class MainWindowController implements AutoCloseable {
     }
 
     private Parent createRequestWorkspace() {
+        Tab requestTab = new Tab("Untitled Request", createRequestContent());
+        requestTab.textProperty().bind(javafx.beans.binding.Bindings.when(draft.dirtyProperty())
+                .then("Untitled Request *").otherwise("Untitled Request"));
+        requestTab.setClosable(false);
+        TabPane requestTabs = new TabPane(requestTab);
+        requestTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
+        requestTabs.getStyleClass().add("request-tabs");
+        return requestTabs;
+    }
+
+    /** Reusable editor/response workspace for a saved-request tab. */
+    public Parent createRequestContent() {
         RequestToolbar toolbar = new RequestToolbar(
                 viewModel,
                 this::onSendRequested,
                 this::onCancelRequested);
 
-        TabPane editorTabs = new TabPane(
-                editorTab("Params", "No query parameters", "Add query parameters to the request URL."),
-                editorTab("Headers", "No request headers", "Add headers that should be sent with the request."),
-                editorTab("Auth", "No authentication", "Choose and configure an authentication method."),
-                editorTab("Body", "No request body", "Choose a body type and enter request content."),
-                editorTab("Tests", "No response tests", "Add assertions for status, headers, and JSON content."));
-        editorTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        editorTabs.getStyleClass().add("editor-tabs");
-        VBox.setVgrow(editorTabs, Priority.ALWAYS);
-
-        VBox requestEditor = new VBox(toolbar, editorTabs);
+        editor = new RequestEditor(draft);
+        VBox.setVgrow(editor, Priority.ALWAYS);
+        VBox requestEditor = new VBox(toolbar, RequestEditor.error(draft.urlError, "request-url-error"),
+                RequestEditor.error(draft.summary, "request-validation-summary"), editor);
         requestEditor.setMinHeight(260);
         requestEditor.getStyleClass().add("request-editor");
 
@@ -108,17 +124,9 @@ public final class MainWindowController implements AutoCloseable {
         requestAndResponse.setDividerPositions(0.55);
         requestAndResponse.getStyleClass().add("workspace-split");
 
-        Tab requestTab = new Tab("Untitled Request", requestAndResponse);
-        requestTab.setClosable(false);
-
-        TabPane requestTabs = new TabPane(requestTab);
-        requestTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
-        requestTabs.getStyleClass().add("request-tabs");
-        return requestTabs;
-    }
-
-    private Tab editorTab(String title, String emptyTitle, String description) {
-        return new Tab(title, new EmptyStatePane(emptyTitle, description));
+        BorderPane content = new BorderPane(requestAndResponse);
+        content.setBottom(createStatusBar());
+        return content;
     }
 
     private Parent createStatusBar() {
@@ -139,29 +147,87 @@ public final class MainWindowController implements AutoCloseable {
     private void onSendRequested() {
         if (engine == null) { viewModel.showMessage("HTTP engine is unavailable."); return; }
         if (viewModel.operationInProgressProperty().get() || closed) return;
-        RequestConfiguration configuration = new RequestConfiguration(
-                HttpMethod.valueOf(viewModel.requestMethodProperty().get().name()),
-                viewModel.requestUrlProperty().get(), java.util.List.of(), java.util.List.of(), java.util.List.of(),
-                RequestBody.none(), java.time.Duration.ofSeconds(30), RedirectPolicy.NORMAL, HttpProtocol.HTTP_2);
+        var snapshot = draft.snapshot();
+        if (snapshot.isEmpty()) { viewModel.showMessage(draft.summary.get()); return; }
+        RequestConfiguration configuration = snapshot.orElseThrow();
+        long revision = draft.revision();
+        long ticket = ++submission;
         viewModel.beginOperation();
+        viewModel.showMessage("Validating request…");
         responsePanel.showLoading();
-        active = engine.execute(configuration);
+        try {
+            pendingValidation = validation.submit(() -> {
+                java.util.List<RequestValidation.Issue> checked;
+                try { checked = RequestValidation.validate(configuration); }
+                catch (RuntimeException failure) {
+                    checked = java.util.List.of(new RequestValidation.Issue("body", "The request could not be validated. Check its content and upload metadata."));
+                }
+                var issues = checked;
+                Platform.runLater(() -> {
+                    if (closed || submission != ticket) return;
+                    pendingValidation = null;
+                    if (!issues.isEmpty()) {
+                        if (draft.revision() == revision) draft.showIssues(issues);
+                        viewModel.finishOperation("Request not sent: validation failed."
+                                + (draft.revision() != revision ? " The editor has newer unsent edits." : " See the marked fields."));
+                        responsePanel.showValidationFailure("Request not sent — fix the validation errors in the editor.");
+                        return;
+                    }
+                    execute(configuration, revision);
+                });
+            });
+        } catch (RejectedExecutionException unavailable) {
+            viewModel.finishOperation("Request validation is busy. Try again.");
+            responsePanel.showValidationFailure("Request not sent — validation is busy.");
+        }
+    }
+
+    private void execute(RequestConfiguration configuration, long draftRevision) {
+        responsePanel.showLoading();
+        viewModel.showMessage("Sending request…");
+        try { active = engine.execute(configuration); }
+        catch (RuntimeException exception) {
+            viewModel.finishOperation("Request failed");
+            responsePanel.showResponse(localError(NetworkError.Type.IO, "Unable to start the request."));
+            return;
+        }
         RequestExecution execution = active;
         execution.result().whenComplete((result, failure) -> Platform.runLater(() -> {
             if (closed || active != execution) return;
             active = null;
             viewModel.finishOperation(failure == null ? "Request completed" : "Request failed");
-            if (failure == null) responsePanel.showResponse(result);
+            if (failure == null) {
+                if (result.error().map(error -> error.type() == NetworkError.Type.INVALID_REQUEST).orElse(false)
+                        && configuration.body().type() == RequestBody.Type.MULTIPART && draft.revision() == draftRevision) {
+                    draft.bodyError.set("Upload could not start. Check that all enabled file parts point to readable regular files.");
+                }
+                responsePanel.showResponse(result);
+            }
+            else responsePanel.showResponse(localError(NetworkError.Type.IO, "The request could not be completed."));
         }));
     }
 
     private void onCancelRequested() {
         if (active != null) active.cancel();
+        else if (pendingValidation != null) {
+            submission++;
+            pendingValidation.cancel(true); pendingValidation = null; validation.purge();
+            viewModel.finishOperation("Request cancelled");
+            responsePanel.showResponse(localError(NetworkError.Type.CANCELLED, "The request was cancelled."));
+        }
+    }
+
+    private static ExecutionResult localError(NetworkError.Type type, String message) {
+        return new ExecutionResult(0, java.util.Map.of(), new byte[0], 0, 0,
+                java.util.Optional.of(new NetworkError(type, message)), java.time.Instant.now(), java.util.Optional.empty());
     }
 
     @Override public void close() {
         closed = true;
+        submission++;
+        validation.shutdownNow();
         if (active != null) active.cancel();
+        if (editor != null) editor.close();
         if (responsePanel != null) responsePanel.close();
     }
 }
