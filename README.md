@@ -45,6 +45,12 @@ Install the reactor artifacts locally, then launch the `app` module:
 
 The development build requires Java 25. A future packaging increment will use `jlink` and `jpackage` so installed users do not need a separate Java installation.
 
+## Appearance
+
+Use **Appearance…** in the top toolbar to select **Dark graphite** (the default) or **Light** and choose an accent color. Changes preview immediately across the workspace, response viewer and application dialogs. **Save** keeps the selection for future launches; **Cancel** restores the previous appearance. **Reset to defaults** previews the original graphite palette, which can then be saved.
+
+Preferences are stored separately from requests in `%LOCALAPPDATA%\API Testing Platform\appearance.properties`. Saving runs in the background; failures stay visible in the dialog and can be retried. Missing or invalid preferences fall back to the default theme. The Windows title bar and native file chooser follow Windows settings.
+
 ## Local storage and saved requests
 
 The app opens a SQLite database at `%LOCALAPPDATA%\API Testing Platform\platform.sqlite`, outside the project and installation directories. Startup migrations and every read/write run on a bounded serialized background queue. SQLite uses WAL, foreign keys, a busy timeout and short write transactions. A separate process lock prevents two app instances from editing the same data directory simultaneously.

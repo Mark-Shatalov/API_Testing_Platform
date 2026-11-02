@@ -5,10 +5,12 @@ module dev.apitestingplatform.ui {
     requires org.fxmisc.richtext;
     requires org.fxmisc.flowless;
     requires org.fxmisc.undo;
+    requires reactfx;
     exports dev.apitestingplatform.ui;
     exports dev.apitestingplatform.ui.controller;
     exports dev.apitestingplatform.ui.components;
     exports dev.apitestingplatform.ui.response;
     exports dev.apitestingplatform.ui.viewmodel;
+    exports dev.apitestingplatform.ui.theme;
 }
 

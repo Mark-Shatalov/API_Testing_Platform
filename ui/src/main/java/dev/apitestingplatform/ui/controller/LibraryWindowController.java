@@ -39,6 +39,9 @@ public final class LibraryWindowController implements AutoCloseable {
     private long refreshVersion;
     private boolean initializedTab;
     private final Set<UUID> recovering = new HashSet<>();
+    private Runnable appearanceAction = () -> { };
+
+    public void setAppearanceAction(Runnable action) { appearanceAction = Objects.requireNonNull(action); }
 
     private static final class Entry {
         final UUID tabId;
@@ -92,13 +95,15 @@ public final class LibraryWindowController implements AutoCloseable {
         sidebar.getStyleClass().add("library-sidebar"); sidebar.setMinWidth(280); sidebar.setPrefWidth(330);
         VBox.setVgrow(tree, Priority.ALWAYS);
         tabs.setId("library-request-tabs"); tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
+        tabs.getStyleClass().add("request-tabs");
         SplitPane split = new SplitPane(sidebar, tabs); split.setDividerPositions(0.24);
         FlowPane toolbar = new FlowPane(8, 6, new Label("API Testing Platform · LOCAL"),
                 button("New tab", "library-new-tab", this::newTab), button("Save", "library-save", this::saveActive),
                 button("Save As…", "library-save-as", () -> { Entry entry = active(); if (entry != null) save(entry, true, () -> { }); }),
                 button("Refresh", "library-refresh", this::refresh),
                 button("Retry recovery save", "library-retry-drafts", this::retryDrafts),
-                button("Recover tabs…", "library-recover", this::offerRecovery));
+                button("Recover tabs…", "library-recover", this::offerRecovery),
+                button("Appearance…", "library-appearance", () -> appearanceAction.run()));
         recoveryStatus.setId("library-autosave-status"); toolbar.getChildren().add(recoveryStatus);
         toolbar.getStyleClass().add("library-toolbar");
         status.setId("library-status"); status.setWrapText(true); status.getStyleClass().add("status-bar");
