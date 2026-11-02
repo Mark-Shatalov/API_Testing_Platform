@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Phases 1–2 (steps 4–9) and Phase 3 (steps 10–11) are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution and authentication helpers. Assertions and collection execution are subsequent increments.
+Phases 1–3 (steps 4–11) and Phase 4 step 12 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers and declarative response assertions. Response extraction and collection execution are subsequent increments.
 
 ## Module structure
 
@@ -67,7 +67,7 @@ Complete request and recovery payloads are versioned JSON envelopes in TEXT colu
 
 `schema_version` records ordered SHA-256-checksummed migrations. Changed checksums or unknown schema versions are rejected without replacing data. Before an incompatible migration, `VACUUM INTO` creates a consistent backup under `migration-backups` next to the database; migration SQL and version registration are transactional and roll back on failure. Do not manually copy a live database without its WAL; close the app before file-level backup. Manual backup/restore UI belongs to a later phase.
 
-Environments and variables are implemented in step 10. The schema also prepares assertions, runs, request results and assertion results; their editors, execution and history remain future work. See [Phase 2 implementation and verification](docs/phase-2-implementation.md) and [Step 10 implementation](docs/step-10-environments.md).
+Environments and variables are implemented in step 10. Step 12 saves ordered assertion definitions inside the encrypted request payload alongside editor settings. The schema also prepares normalized assertion/run/result tables; run history persistence remains future work. See [Phase 2 implementation and verification](docs/phase-2-implementation.md), [Step 10 implementation](docs/step-10-environments.md) and [Step 12 assertions](docs/step-12-assertions.md).
 
 ## Environments and variables
 
@@ -95,6 +95,20 @@ The shared `SecretRedactor` masks Authorization, Proxy-Authorization, Cookie, Se
 
 See [Step 11 implementation and verification](docs/step-11-authentication.md).
 
+## Response checks
+
+In the request **Tests** tab, use **Add check** to configure up to 100 named checks in a specific order. Use the arrows to reorder, **On** to enable/disable, and **Remove** to delete a check. Configurations, including incomplete or disabled drafts, are saved/recovered with the encrypted request. Old requests start with no checks.
+
+Supported checks are exact HTTP status, header presence, header content containing literal text, JSONPath presence, JSONPath value equality, maximum duration in milliseconds, and maximum response size in bytes. Header names are case-insensitive; content matching is case-sensitive and succeeds when any individual value contains the expected text. Time/size bounds are inclusive. JSON equality takes a literal JSON value: `2`, `true`, `null`, `"hello"`, arrays or objects. Types and structure must match; numeric scale and object-member order are ignored. JSONPath presence treats an explicitly null field as present. Assertion expected values are literals, not variable templates.
+
+JSONPath uses Jayway 3.0.0 with a bounded Jackson provider. Supported paths select one value, for example `$.id`, `$.users[0].name`, or `$['key.with.dots']`. Filters, wildcards, recursive descent, slices, functions and scripts are rejected. Paths are limited to 64 segments. JSON response checks require a complete body no larger than 2 MiB, with depth/number/string parsing limits and unique object keys. These checks never execute JavaScript.
+
+**Send** validates enabled checks before network traffic, then runs them against the immutable submitted check list and immutable response on a bounded worker. Edits during the request affect the next Send. **Preview target** does not run checks or send traffic. In **Response → Test Results**, each row shows **PASS**, **FAIL**, **NOT RUN**, or **DISABLED**, expected/actual values and a reason. Hover over a truncated cell for its complete display text; display values are capped at 512 characters after redaction. The summary counts each outcome separately. HTTP 4xx/5xx responses can pass checks that expect those statuses; transport errors/timeout/cancellation give NOT RUN, never a fake pass.
+
+Malformed/empty/oversized/truncated JSON gives NOT RUN for JSON checks while independent status/header checks can still run. For truncated downloads, a size/time already above the maximum conclusively fails; a captured measurement below the maximum is NOT RUN because the complete response is unknown. Cancel during check evaluation preserves the received response and marks unfinished checks NOT RUN. Known secrets and credential headers are masked in assertion results; raw response debugging remains unchanged. JSONPath's own debug logging is disabled to keep user paths out of diagnostics.
+
+Check results are available for the current response; persistent execution history belongs to step 15. Check definitions currently live in the encrypted request JSON rather than a second normalized copy. See [Step 12 implementation and verification](docs/step-12-assertions.md).
+
 ## HTTP engine
 
 `JavaHttpExecutionEngine` implements the application module's `HttpExecutionEngine` port and uses Java 25 `HttpClient.sendAsync`. Construct one engine during background startup, reuse it, and close it on shutdown. Calls to `execute` return immediately with a `RequestExecution` handle; its `result()` stage completes with an immutable `ExecutionResult`. Use `cancel()` on the handle to cancel transport work. Cancelling a copy returned by `result().toCompletableFuture()` does not cancel transport work.
@@ -120,7 +134,8 @@ Enter an absolute HTTP(S) URL, select the method, configure the editor tabs, and
 - Format JSON validates and formats on a bounded worker. Syntax errors identify line and column. Formatting has depth and output limits; stale formatting never overwrites newer edits.
 - Settings: timeout in seconds (including fractional seconds, positive and at most 86400), redirect policy, and preferred HTTP version.
 - Variables: request-local ordinary or secret values used by template resolution.
-- Auth: No auth, Bearer Token, Basic Auth and API Key helpers with optional variables and hidden credentials. Tests remains future-phase functionality; no JavaScript is executed.
+- Auth: No auth, Bearer Token, Basic Auth and API Key helpers with optional variables and hidden credentials.
+- Tests: ordered declarative response checks and field-level configuration errors; no JavaScript is executed.
 
 Validation runs before network traffic. Invalid URLs, JSON, HEAD bodies, cookie/header injection, transport-managed headers, and unsafe multipart metadata produce field/row-level errors. Invalid upload files are rejected by infrastructure before HTTP dispatch. Validation messages do not echo request secrets. A HEAD request must use None; GET bodies are allowed but may be rejected by individual servers.
 
@@ -136,7 +151,7 @@ Bodies are rendered in 64 KiB character pages. Find next/previous searches the e
 
 Save Response opens a Windows file dialog and writes the original captured bytes on a background thread using a temporary file and atomic replacement where supported. Pretty formatting and text decoding do not alter saved bytes. Oversized responses clearly show that search and saving cover only the retained prefix. The viewer also enforces its own 10 MiB limit when receiving results from another engine implementation.
 
-Loading, success, HTTP error, DNS, TLS, connection refusal, redirect failure, other network errors, timeout, neutral cancellation, and response-too-large states are distinct. Duplicate response headers are retained. Cookies show their name, value, domain, path, expiry, Max-Age, Secure, HttpOnly, SameSite, and original Set-Cookie text. `ResponsePanel.showTests` accepts assertion results; this step displays them and does not implement an assertion runner. Before results are supplied, the tab explicitly says that no assertions are configured.
+Loading, success, HTTP error, DNS, TLS, connection refusal, redirect failure, other network errors, timeout, neutral cancellation, and response-too-large states are distinct. Duplicate response headers are retained. Cookies show their name, value, domain, path, expiry, Max-Age, Secure, HttpOnly, SameSite, and original Set-Cookie text. `ResponsePanel.showTests` displays the step 12 assertion results with separate outcomes, expected/actual values and reasons. An unconfigured request shows an explicit empty state.
 
 Formatting, searches, and saves use bounded background executors; stale preparation/search results are ignored when a new response arrives. Viewer work is cancelled when the window closes. Tests include actual JavaFX windows and a local MockWebServer-to-viewer debugging flow; `clean verify` therefore requires access to a Windows desktop and local loopback sockets.
 

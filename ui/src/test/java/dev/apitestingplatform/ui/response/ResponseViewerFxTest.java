@@ -121,7 +121,7 @@ class ResponseViewerFxTest {
             assertThat(panel.stateProperty().get()).isEqualTo(ResponseState.HTTP_ERROR);
             panel.showTests(List.of(new ResponseTestResult("Expected status", false, "Expected 200; received 404")));
             TabPane tabs = (TabPane) panel.lookup("#response-tabs");
-            assertThat(((TableView<?>) tabs.getTabs().get(3).getContent()).getItems()).hasSize(1);
+            assertThat(((TableView<?>) tabs.getTabs().get(3).getContent().lookup("#response-test-results")).getItems()).hasSize(1);
             return null;
         });
     }

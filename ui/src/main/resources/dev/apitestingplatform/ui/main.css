@@ -479,3 +479,9 @@
 .target-preview { -fx-padding: 6px 16px; -fx-background-color: -app-surface; }
 .target-preview .label { -fx-text-fill: -app-muted; -fx-font-size: 11px; }
 #environment-controls { -fx-padding: 8px 0; -fx-border-color: -app-border; -fx-border-width: 0 0 1px 0; }
+.assertion-row { -fx-padding: 8px 4px 14px 4px; -fx-border-color: -app-border; -fx-border-width: 0 0 1px 0; }
+.test-summary { -fx-padding: 10px 12px; -fx-text-fill: -app-text; }
+.table-cell.assertion-pass { -fx-text-fill: -app-success; -fx-font-weight: bold; }
+.table-cell.assertion-fail { -fx-text-fill: -app-error; -fx-font-weight: bold; }
+.table-cell.assertion-not-run { -fx-text-fill: -app-warning; }
+.table-cell.assertion-disabled { -fx-text-fill: -app-muted; }

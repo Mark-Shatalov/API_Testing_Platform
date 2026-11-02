@@ -11,6 +11,11 @@ import dev.apitestingplatform.application.http.HttpExecutionEngine;
 import dev.apitestingplatform.application.http.RequestExecution;
 import dev.apitestingplatform.application.http.RequestValidation;
 import dev.apitestingplatform.application.http.VariableResolver;
+import dev.apitestingplatform.application.http.AssertionEngine;
+import dev.apitestingplatform.application.http.SecretRedactor;
+import dev.apitestingplatform.domain.http.AssertionDefinition;
+import dev.apitestingplatform.domain.http.AssertionResult;
+import dev.apitestingplatform.ui.response.ResponseTestResult;
 import dev.apitestingplatform.domain.http.RequestConfiguration;
 import dev.apitestingplatform.domain.http.RequestBody;
 import javafx.application.Platform;
@@ -44,6 +49,9 @@ public final class MainWindowController implements AutoCloseable {
     private final HttpExecutionEngine engine;
     private RequestEditor editor;
     private Future<?> pendingValidation;
+    private Future<?> pendingAssertions;
+    private java.util.List<AssertionDefinition> runningAssertions = java.util.List.of();
+    private SecretRedactor runningRedactor = SecretRedactor.empty();
     private long submission;
     private ResponsePanel responsePanel;
     private RequestExecution active;
@@ -168,6 +176,7 @@ public final class MainWindowController implements AutoCloseable {
         RequestConfiguration configuration = snapshot.orElseThrow();
         var localVariables = draft.variables.stream().map(RequestEditorViewModel.VariableRow::snapshot).toList();
         var authentication = draft.authentication();
+        var assertions = draft.assertions.stream().map(RequestEditorViewModel.AssertionRow::snapshot).toList();
         CompletionStage<VariableResolver.Context> context;
         try { context = variableContext.get(); }
         catch (RuntimeException failure) { draft.variableError.set("Workspace variables are unavailable. Refresh and try again."); return; }
@@ -184,6 +193,7 @@ public final class MainWindowController implements AutoCloseable {
                 try {
                     resolved = VariableResolver.resolve(configuration, context.toCompletableFuture().get(10, TimeUnit.SECONDS), localVariables, authentication);
                     checked = resolved.issues().isEmpty() ? RequestValidation.validate(resolved.request()) : resolved.issues();
+                    if (send && checked.isEmpty()) checked = AssertionEngine.validate(assertions);
                 } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
                 catch (ExecutionException | TimeoutException failure) {
                     checked = java.util.List.of(new RequestValidation.Issue("variables", "Workspace variables could not be loaded. Refresh environments and try again."));
@@ -201,11 +211,14 @@ public final class MainWindowController implements AutoCloseable {
                         if (draft.revision() == revision) draft.showIssues(issues);
                         viewModel.finishOperation("Request not sent: validation failed."
                                 + (draft.revision() != revision ? " The editor has newer unsent edits." : " See the marked fields."));
-                        if (send) responsePanel.showValidationFailure("Request not sent — fix the validation errors in the editor.");
+                        if (send) {
+                            responsePanel.showValidationFailure("Request not sent — fix the validation errors in the editor.");
+                            responsePanel.showTests(notRun(assertions, prepared == null ? SecretRedactor.empty() : prepared.redactor(), "Request was not sent because validation failed. See the marked editor fields."));
+                        }
                         return;
                     }
                     target.setText("Target: " + prepared.preview());
-                    if (send) execute(prepared.request(), revision);
+                    if (send) execute(prepared.request(), revision, assertions, prepared.redactor());
                     else viewModel.finishOperation("Target preview ready. Secret variables are masked; no request was sent.");
                 });
             });
@@ -215,33 +228,63 @@ public final class MainWindowController implements AutoCloseable {
         }
     }
 
-    private void execute(RequestConfiguration configuration, long draftRevision) {
+    private void execute(RequestConfiguration configuration, long draftRevision, java.util.List<AssertionDefinition> assertions, SecretRedactor redactor) {
         responsePanel.showLoading();
         viewModel.showMessage("Sending request…");
         try { active = engine.execute(configuration); }
         catch (RuntimeException exception) {
-            viewModel.finishOperation("Request failed");
-            responsePanel.showResponse(localError(NetworkError.Type.IO, "Unable to start the request."));
+            presentResponse(localError(NetworkError.Type.IO, "Unable to start the request."), assertions, redactor);
             return;
         }
         RequestExecution execution = active;
         execution.result().whenComplete((result, failure) -> Platform.runLater(() -> {
             if (closed || active != execution) return;
             active = null;
-            viewModel.finishOperation(failure == null ? "Request completed" : "Request failed");
             if (failure == null) {
                 if (result.error().map(error -> error.type() == NetworkError.Type.INVALID_REQUEST).orElse(false)
                         && configuration.body().type() == RequestBody.Type.MULTIPART && draft.revision() == draftRevision) {
                     draft.bodyError.set("Upload could not start. Check that all enabled file parts point to readable regular files.");
                 }
-                responsePanel.showResponse(result);
+                presentResponse(result, assertions, redactor);
             }
-            else responsePanel.showResponse(localError(NetworkError.Type.IO, "The request could not be completed."));
+            else presentResponse(localError(NetworkError.Type.IO, "The request could not be completed."), assertions, redactor);
         }));
+    }
+    private void presentResponse(ExecutionResult result, java.util.List<AssertionDefinition> assertions, SecretRedactor redactor) {
+        responsePanel.showResponse(result);
+        String completion = result.error().map(error -> error.type() == NetworkError.Type.CANCELLED ? "Request cancelled" : "Request failed").orElse("Request completed");
+        if (assertions.isEmpty()) { viewModel.finishOperation(completion); return; }
+        long ticket = submission; runningAssertions = assertions; runningRedactor = redactor;
+        responsePanel.showTestsPending(); viewModel.showMessage("Checking response…");
+        try {
+            pendingAssertions = validation.submit(() -> {
+                java.util.List<ResponseTestResult> checks;
+                try { checks = AssertionEngine.evaluate(result, assertions, redactor).stream().map(ResponseTestResult::from).toList(); }
+                catch (RuntimeException failure) { checks = notRun(assertions, redactor, "The checks could not be evaluated safely."); }
+                var evaluated = checks;
+                Platform.runLater(() -> {
+                    if (closed || ticket != submission) return;
+                    pendingAssertions = null; runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty();
+                    responsePanel.showTests(evaluated); viewModel.finishOperation(completion + " — checks finished");
+                });
+            });
+        } catch (RejectedExecutionException busy) {
+            runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty();
+            responsePanel.showTests(notRun(assertions, redactor, "Check worker is busy. Send again to retry.")); viewModel.finishOperation(completion);
+        }
+    }
+    private static java.util.List<ResponseTestResult> notRun(java.util.List<AssertionDefinition> assertions, SecretRedactor redactor, String reason) {
+        return assertions.stream().map(rule -> new ResponseTestResult(redactor.text(rule.name()), rule.enabled() ? AssertionResult.Outcome.NOT_RUN : AssertionResult.Outcome.DISABLED,
+                "", "", rule.enabled() ? reason : "Check is disabled.")).toList();
     }
 
     private void onCancelRequested() {
         if (active != null) active.cancel();
+        else if (pendingAssertions != null) {
+            submission++; pendingAssertions.cancel(true); pendingAssertions = null; validation.purge();
+            responsePanel.showTests(notRun(runningAssertions, runningRedactor, "Check evaluation was cancelled."));
+            runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty(); viewModel.finishOperation("Checks cancelled; response is still available.");
+        }
         else if (pendingValidation != null) {
             submission++;
             pendingValidation.cancel(true); pendingValidation = null; validation.purge();

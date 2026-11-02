@@ -1,0 +1,8 @@
+<configuration>
+    <!-- JSONPath debug messages include user-supplied paths. Keep them out of diagnostics. -->
+    <logger name="com.jayway.jsonpath" level="OFF"/>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>%date %-5level %logger{36} - %msg%n</pattern></encoder>
+    </appender>
+    <root level="WARN"><appender-ref ref="CONSOLE"/></root>
+</configuration>

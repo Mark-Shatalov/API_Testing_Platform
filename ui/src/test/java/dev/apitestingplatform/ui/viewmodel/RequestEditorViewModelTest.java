@@ -9,6 +9,17 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class RequestEditorViewModelTest {
+    @Test void orderedAssertionsRoundTripAndInFlightSnapshotsRemainUnchanged() {
+        var model = new RequestEditorViewModel(new MainWindowViewModel());
+        model.assertions.add(new RequestEditorViewModel.AssertionRow("First"));
+        var second = new RequestEditorViewModel.AssertionRow("Second"); second.type.set(AssertionDefinition.Type.JSON_PATH_EXISTS); second.target.set("$.id"); model.assertions.add(second);
+        var captured = model.capture(); var restored = new RequestEditorViewModel(new MainWindowViewModel()); restored.load(captured);
+        assertThat(restored.capture().assertions()).isEqualTo(captured.assertions()); assertThat(restored.dirtyProperty().get()).isFalse();
+        restored.assertions.getFirst().expected.set("500"); assertThat(restored.dirtyProperty().get()).isTrue();
+        assertThat(captured.assertions().getFirst().expected()).isEqualTo("200");
+        restored.showIssues(List.of(new RequestValidation.Issue("tests.1", "Missing JSONPath")));
+        assertThat(restored.assertions.get(1).error.get()).isEqualTo("Missing JSONPath");
+    }
     @Test void authModesRoundTripIncludingInactiveValuesAndEveryEditMarksTheDraftDirty() {
         var model = new RequestEditorViewModel(new MainWindowViewModel());
         model.authMode.set(Authentication.Mode.BEARER); model.bearerToken.set("{{token}}"); model.authUsername.set("retained-user");
