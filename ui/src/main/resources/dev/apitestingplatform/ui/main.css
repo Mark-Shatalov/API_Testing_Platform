@@ -476,3 +476,6 @@
 .response-code .selection { -fx-fill: -app-selection; }
 .library-toolbar { -fx-border-color: -app-border; -fx-border-width: 0 0 1px 0; }
 #library-appearance { -fx-font-weight: bold; }
+.target-preview { -fx-padding: 6px 16px; -fx-background-color: -app-surface; }
+.target-preview .label { -fx-text-fill: -app-muted; -fx-font-size: 11px; }
+#environment-controls { -fx-padding: 8px 0; -fx-border-color: -app-border; -fx-border-width: 0 0 1px 0; }

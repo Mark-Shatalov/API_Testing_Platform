@@ -30,6 +30,7 @@ public final class RequestEditor extends TabPane implements AutoCloseable {
                 new Tab("Cookies", new KeyValueEditor("cookies", draft.cookies, false)),
                 new Tab("Auth", new EmptyStatePane("Authentication", "Use the Headers tab for explicit Authorization headers. Authentication helpers come in a later phase.")),
                 new Tab("Body", body()), new Tab("Settings", settings()),
+                new Tab("Variables", new VBox(error(draft.variableError, "request-variable-error"), new VariableEditor(draft.variables))),
                 new Tab("Tests", new EmptyStatePane("No assertions configured", "Automated response assertions come in a later phase.")));
     }
 

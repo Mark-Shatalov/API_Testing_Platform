@@ -1,6 +1,7 @@
 package dev.apitestingplatform.application.storage;
 
 import dev.apitestingplatform.domain.storage.*;
+import dev.apitestingplatform.domain.variables.*;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -20,5 +21,11 @@ public interface LibraryRepository extends AutoCloseable {
     CompletionStage<List<RecoveryDraft>> recoverableDrafts();
     CompletionStage<RecoveryDraft> claimDraft(UUID tabId);
     CompletionStage<Void> finishSession();
+    CompletionStage<WorkspaceVariables> loadVariables(UUID workspaceId);
+    CompletionStage<Void> saveWorkspaceVariables(UUID workspaceId, long expectedVersion, List<Variable> variables);
+    CompletionStage<Environment> createEnvironment(UUID workspaceId, String name, List<Variable> variables);
+    CompletionStage<Environment> saveEnvironment(Environment environment);
+    CompletionStage<Void> deleteEnvironment(UUID environmentId, long expectedVersion);
+    CompletionStage<Void> selectEnvironment(UUID workspaceId, UUID environmentId);
     @Override void close();
 }

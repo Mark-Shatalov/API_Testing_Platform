@@ -3,6 +3,7 @@ package dev.apitestingplatform.ui.viewmodel;
 import dev.apitestingplatform.application.http.RequestValidation;
 import dev.apitestingplatform.domain.http.*;
 import dev.apitestingplatform.domain.storage.RequestDraft;
+import dev.apitestingplatform.domain.variables.Variable;
 import javafx.beans.Observable;
 import javafx.beans.property.*;
 import javafx.collections.FXCollections;
@@ -15,6 +16,16 @@ import java.util.Optional;
 
 /** Mutable draft, deliberately separate from the immutable snapshot sent to the engine. */
 public final class RequestEditorViewModel {
+    public static final class VariableRow {
+        public final StringProperty name = new SimpleStringProperty("");
+        public final StringProperty value = new SimpleStringProperty("");
+        public final BooleanProperty secret = new SimpleBooleanProperty(false);
+        public VariableRow() { }
+        public VariableRow(Variable variable) { name.set(variable.name()); value.set(variable.value()); secret.set(variable.secret()); }
+        public Variable snapshot() { return new Variable(name.get(), value.get(), secret.get()); }
+    }
+    public final ObservableList<VariableRow> variables = FXCollections.observableArrayList(row -> new Observable[]{row.name, row.value, row.secret});
+    public final StringProperty variableError = new SimpleStringProperty("");
     public static final class Row {
         public final BooleanProperty enabled = new SimpleBooleanProperty(true);
         public final StringProperty name = new SimpleStringProperty("");
@@ -52,7 +63,7 @@ public final class RequestEditorViewModel {
 
     public RequestEditorViewModel(MainWindowViewModel main) {
         this.main = main;
-        for (Observable value : List.of(params, headers, cookies, form, multipart, bodyType, bodyText,
+        for (Observable value : List.of(variables, params, headers, cookies, form, multipart, bodyType, bodyText,
                 timeout, redirects, protocol, main.requestUrlProperty(), main.requestMethodProperty())) {
             value.addListener(ignored -> {
                 // Validate observable values so successive edits notify even without an attached control.
@@ -76,13 +87,14 @@ public final class RequestEditorViewModel {
                 params.stream().map(Row::snapshot).toList(), headers.stream().map(Row::snapshot).toList(),
                 cookies.stream().map(Row::snapshot).toList(), bodyType.get(), bodyText.get(), form.stream().map(Row::snapshot).toList(),
                 multipart.stream().map(row -> new RequestDraft.Part(row.name.get(), row.value.get(), row.file.get(), row.contentType.get(), row.enabled.get())).toList(),
-                timeout.get(), redirects.get(), protocol.get());
+                timeout.get(), redirects.get(), protocol.get(), variables.stream().map(VariableRow::snapshot).toList());
     }
     public void load(RequestDraft saved) {
         loading = true;
         try {
             main.requestMethodProperty().set(HttpMethodOption.valueOf(saved.method().name())); main.requestUrlProperty().set(saved.url());
             loadRows(params, saved.params()); loadRows(headers, saved.headers()); loadRows(cookies, saved.cookies()); loadRows(form, saved.form());
+            variables.setAll(saved.variables().stream().map(VariableRow::new).toList());
             multipart.setAll(saved.multipart().stream().map(part -> {
                 Row row = new Row(part.name(), part.value(), part.enabled()); row.file.set(part.file()); row.contentType.set(part.contentType()); return row;
             }).toList());
@@ -137,7 +149,7 @@ public final class RequestEditorViewModel {
     }
 
     public void clearErrors() {
-        urlError.set(""); bodyError.set(""); timeoutError.set(""); summary.set("");
+        urlError.set(""); bodyError.set(""); timeoutError.set(""); variableError.set(""); summary.set("");
         for (var rows : List.of(params, headers, cookies, form, multipart)) rows.forEach(row -> row.error.set(""));
     }
 
@@ -146,6 +158,7 @@ public final class RequestEditorViewModel {
         for (var issue : issues) {
             switch (issue.field()) {
                 case "url" -> urlError.set(issue.message());
+                case "variables" -> variableError.set(issue.message());
                 case "body" -> bodyError.set(bodyError.get().isEmpty() ? issue.message() : bodyError.get() + "\n" + issue.message());
                 default -> {
                     String[] field = issue.field().split("\\.");

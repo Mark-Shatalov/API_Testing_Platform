@@ -96,7 +96,7 @@ class AppearanceIntegrationTest {
         assertThat(text.getBrightness() > 0.5).isEqualTo(dark);
     }
     /** Optional raw snapshots for visual QA; no AWT/Swing dependency is added to the application. */
-    private static void snapshot(Parent root, String name) throws Exception {
+    static void snapshot(Parent root, String name) throws Exception {
         String output = System.getProperty("appearance.snapshots"); if (output == null) return;
         root.applyCss(); root.layout(); var image = root.snapshot(null, null);
         int width = (int) image.getWidth(), height = (int) image.getHeight(); byte[] pixels = new byte[width * height * 4];

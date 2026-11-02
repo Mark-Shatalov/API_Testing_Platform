@@ -2,6 +2,7 @@ package dev.apitestingplatform.persistence.sqlite;
 
 import dev.apitestingplatform.application.storage.*;
 import dev.apitestingplatform.domain.storage.*;
+import dev.apitestingplatform.domain.variables.*;
 import java.nio.channels.*;
 import java.nio.file.*;
 import java.sql.*;
@@ -205,6 +206,115 @@ public final class SqliteLibraryRepository implements LibraryRepository {
     })); }
     @Override public CompletionStage<Void> finishSession() { return submit(() -> {
         execute("DELETE FROM drafts WHERE session_id=?", session.toString()); return null;
+    }); }
+    private void requireWorkspace(UUID id) throws SQLException {
+        if (get(id).kind() != LibraryItem.Kind.WORKSPACE) throw new StorageException("Select a valid workspace.");
+    }
+    @Override public CompletionStage<WorkspaceVariables> loadVariables(UUID workspaceId) { return submit(() -> {
+        requireWorkspace(workspaceId);
+        List<Environment> environments = new ArrayList<>();
+        try (var query = db.prepareStatement("SELECT id FROM environments WHERE workspace_id=? ORDER BY name COLLATE NOCASE,id")) {
+            query.setString(1, workspaceId.toString());
+            try (var rows = query.executeQuery()) { while (rows.next()) environments.add(readEnvironment(UUID.fromString(rows.getString(1)))); }
+        }
+        try (var query = db.prepareStatement("SELECT * FROM workspace_variable_settings WHERE workspace_id=?")) {
+            query.setString(1, workspaceId.toString());
+            try (var row = query.executeQuery()) {
+                if (!row.next()) return new WorkspaceVariables(0, List.of(), environments, null);
+                String selected = row.getString("selected_environment_id");
+                return new WorkspaceVariables(row.getLong("version"), codec.decodeValue(row.getString("variables_json"), VariableSet.class).variables(),
+                        environments, selected == null ? null : UUID.fromString(selected));
+            }
+        }
+    }); }
+    @Override public CompletionStage<Void> saveWorkspaceVariables(UUID workspaceId, long expectedVersion, List<Variable> variables) {
+        VariableSet snapshot = new VariableSet(variables);
+        return submit(() -> {
+            String payload = codec.encodeValue(snapshot);
+            return transaction(() -> {
+                requireWorkspace(workspaceId);
+                long version = 0;
+                try (var query = db.prepareStatement("SELECT version FROM workspace_variable_settings WHERE workspace_id=?")) {
+                    query.setString(1, workspaceId.toString()); try (var row = query.executeQuery()) { if (row.next()) version = row.getLong(1); }
+                }
+                if (version != expectedVersion) throw new StorageException("Workspace variables changed. Reopen the editor before saving again.");
+                execute("INSERT INTO workspace_variable_settings(workspace_id,version,variables_json) VALUES(?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version,variables_json=excluded.variables_json",
+                        workspaceId.toString(), Long.toString(version + 1), payload); return null;
+            });
+        });
+    }
+    private Environment readEnvironment(UUID id) throws Exception {
+        try (var query = db.prepareStatement("SELECT * FROM environments WHERE id=?")) {
+            query.setString(1, id.toString());
+            try (var row = query.executeQuery()) {
+                if (!row.next()) throw new StorageException("This environment no longer exists. Refresh the environment list.");
+                List<Variable> variables = new ArrayList<>();
+                try (var values = db.prepareStatement("SELECT * FROM variables WHERE environment_id=? ORDER BY position,id")) {
+                    values.setString(1, id.toString()); try (var entries = values.executeQuery()) {
+                        while (entries.next()) variables.add(new Variable(entries.getString("name"),
+                                codec.decodeValue(entries.getString("value_json"), String.class), entries.getInt("secret") != 0));
+                    }
+                }
+                return new Environment(id, UUID.fromString(row.getString("workspace_id")), row.getString("name"), row.getLong("version"),
+                        Instant.parse(row.getString("modified_at")), variables);
+            }
+        }
+    }
+    @Override public CompletionStage<Environment> createEnvironment(UUID workspaceId, String name, List<Variable> variables) {
+        return writeEnvironment(new Environment(UUID.randomUUID(), workspaceId, name, 0, Instant.now(), variables), true);
+    }
+    @Override public CompletionStage<Environment> saveEnvironment(Environment environment) { return writeEnvironment(environment, false); }
+    private CompletionStage<Environment> writeEnvironment(Environment environment, boolean create) { return submit(() -> {
+        List<String> protectedValues = new ArrayList<>();
+        for (Variable variable : environment.variables()) protectedValues.add(codec.encodeValue(variable.value()));
+        return transaction(() -> {
+            requireWorkspace(environment.workspaceId());
+            if (create) try (var query = db.prepareStatement("SELECT count(*) FROM environments WHERE workspace_id=?")) {
+                query.setString(1, environment.workspaceId().toString());
+                try (var row = query.executeQuery()) { if (row.next() && row.getInt(1) >= 100) throw new StorageException("A workspace can contain at most 100 environments."); }
+            }
+            if (!create) {
+                Environment previous = readEnvironment(environment.id());
+                if (previous.version() != environment.version() || !previous.workspaceId().equals(environment.workspaceId()))
+                    throw new StorageException("Environment changed. Reopen it before saving again.");
+            }
+            try (var query = db.prepareStatement("SELECT id FROM environments WHERE workspace_id=? AND name=? COLLATE NOCASE AND id<>?")) {
+                query.setString(1, environment.workspaceId().toString()); query.setString(2, environment.name()); query.setString(3, environment.id().toString());
+                try (var row = query.executeQuery()) { if (row.next()) throw new StorageException("An environment with that name already exists in this workspace."); }
+            }
+            String now = Instant.now().toString();
+            if (create) execute("INSERT INTO environments(id,workspace_id,name,modified_at,version) VALUES(?,?,?,?,0)",
+                    environment.id().toString(), environment.workspaceId().toString(), environment.name(), now);
+            else execute("UPDATE environments SET name=?,modified_at=?,version=version+1 WHERE id=?", environment.name(), now, environment.id().toString());
+            // Preserve IDs for variables whose names are unchanged; remove deleted names only.
+            try (var query = db.prepareStatement("SELECT id,name FROM variables WHERE environment_id=?")) {
+                query.setString(1, environment.id().toString());
+                List<String> removed = new ArrayList<>();
+                try (var rows = query.executeQuery()) { while (rows.next()) {
+                    String name = rows.getString("name");
+                    if (environment.variables().stream().noneMatch(value -> value.name().equals(name))) removed.add(rows.getString("id"));
+                } }
+                for (String id : removed) execute("DELETE FROM variables WHERE id=?", id);
+            }
+            for (int i = 0; i < environment.variables().size(); i++) {
+                Variable value = environment.variables().get(i);
+                execute("INSERT INTO variables(id,environment_id,name,value_json,secret,modified_at,position) VALUES(?,?,?,?,?,?,?) ON CONFLICT(environment_id,name) DO UPDATE SET value_json=excluded.value_json,secret=excluded.secret,modified_at=excluded.modified_at,position=excluded.position",
+                        UUID.randomUUID().toString(), environment.id().toString(), value.name(), protectedValues.get(i), value.secret() ? "1" : "0", now, Integer.toString(i));
+            }
+            return readEnvironment(environment.id());
+        });
+    }); }
+    @Override public CompletionStage<Void> deleteEnvironment(UUID id, long expectedVersion) { return submit(() -> transaction(() -> {
+        if (readEnvironment(id).version() != expectedVersion) throw new StorageException("Environment changed. Refresh before deleting it.");
+        execute("DELETE FROM environments WHERE id=?", id.toString()); return null;
+    })); }
+    @Override public CompletionStage<Void> selectEnvironment(UUID workspaceId, UUID environmentId) { return submit(() -> {
+        requireWorkspace(workspaceId);
+        if (environmentId != null && !readEnvironment(environmentId).workspaceId().equals(workspaceId))
+            throw new StorageException("Choose an environment from this workspace.");
+        String empty = codec.encodeValue(new VariableSet(List.of()));
+        execute("INSERT INTO workspace_variable_settings(workspace_id,version,variables_json,selected_environment_id) VALUES(?,0,?,?) ON CONFLICT(workspace_id) DO UPDATE SET selected_environment_id=excluded.selected_environment_id",
+                workspaceId.toString(), empty, environmentId == null ? null : environmentId.toString()); return null;
     }); }
     private void release() {
         try { if (db != null) db.close(); } catch (SQLException ignored) { }

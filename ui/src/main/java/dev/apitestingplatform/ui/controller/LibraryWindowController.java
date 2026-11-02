@@ -24,6 +24,7 @@ public final class LibraryWindowController implements AutoCloseable {
     private final LibraryRepository repository;
     private final HttpExecutionEngine engine;
     private final DraftAutosave autosave;
+    private final EnvironmentControls environments;
     private final ComboBox<LibraryItem> workspaces = new ComboBox<>();
     private final TreeView<LibraryItem> tree = new TreeView<>(new TreeItem<>());
     private final TabPane tabs = new TabPane();
@@ -60,6 +61,7 @@ public final class LibraryWindowController implements AutoCloseable {
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository) { this(engine, repository, true); }
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository, boolean offerRecovery) {
         this.engine = engine; this.repository = Objects.requireNonNull(repository); this.offerRecovery = offerRecovery;
+        environments = new EnvironmentControls(repository);
         autosave = new DraftAutosave(repository, Duration.ofMillis(750), failure -> Platform.runLater(() -> {
             if (!closed) { recoveryStatus.setText("Recovery save failed — use Retry recovery save"); error(failure); }
         }), saved -> Platform.runLater(() -> { if (!closed) recoveryStatus.setText("Recovery snapshot saved"); }));
@@ -68,7 +70,12 @@ public final class LibraryWindowController implements AutoCloseable {
     public Parent createView() {
         workspaces.setId("library-workspaces"); workspaces.setMaxWidth(Double.MAX_VALUE);
         workspaces.setPromptText("Create a workspace");
-        workspaces.valueProperty().addListener((value, before, after) -> { if (!updating) populateTree(); });
+        workspaces.valueProperty().addListener((value, before, after) -> {
+            if (!updating) {
+                populateTree(); environments.setWorkspace(after == null ? null : after.id());
+                if (initializedTab && after != null) activateWorkspaceTab(after.id());
+            }
+        });
         tree.setId("library-tree"); tree.setShowRoot(false); tree.getRoot().setExpanded(true);
         tree.setCellFactory(view -> new TreeCell<>() {
             @Override protected void updateItem(LibraryItem item, boolean empty) {
@@ -89,13 +96,21 @@ public final class LibraryWindowController implements AutoCloseable {
                 button("Move up", "library-up", () -> reorder(-1)), button("Move down", "library-down", () -> reorder(1)),
                 button("Workspace…", "library-workspace-menu", this::workspaceActions));
         Label hint = new Label("Double-click a request to open it. Select a collection to add a folder or request."); hint.setWrapText(true);
+        hint.setMinHeight(Region.USE_PREF_SIZE);
         Label empty = new Label("No collections yet. Use + Collection to organize your requests."); empty.setWrapText(true);
+        empty.setMinHeight(Region.USE_PREF_SIZE);
         empty.visibleProperty().bind(javafx.beans.binding.Bindings.isEmpty(tree.getRoot().getChildren())); empty.managedProperty().bind(empty.visibleProperty());
-        VBox sidebar = new VBox(10, new Label("WORKSPACE"), workspaces, creation, empty, tree, actions, hint);
+        VBox sidebar = new VBox(10, new Label("WORKSPACE"), workspaces, environments, creation, empty, tree, actions, hint);
         sidebar.getStyleClass().add("library-sidebar"); sidebar.setMinWidth(280); sidebar.setPrefWidth(330);
         VBox.setVgrow(tree, Priority.ALWAYS);
         tabs.setId("library-request-tabs"); tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
         tabs.getStyleClass().add("request-tabs");
+        tabs.getSelectionModel().selectedItemProperty().addListener((observable, before, selected) -> {
+            if (selected != null && selected.getUserData() instanceof Entry entry) {
+                LibraryItem workspace = byId(entry.workspaceId);
+                if (workspace != null && !workspace.equals(workspaces.getValue())) workspaces.setValue(workspace);
+            }
+        });
         SplitPane split = new SplitPane(sidebar, tabs); split.setDividerPositions(0.24);
         FlowPane toolbar = new FlowPane(8, 6, new Label("API Testing Platform · LOCAL"),
                 button("New tab", "library-new-tab", this::newTab), button("Save", "library-save", this::saveActive),
@@ -148,6 +163,7 @@ public final class LibraryWindowController implements AutoCloseable {
         workspaces.setValue(workspaces.getItems().stream().filter(item -> item.id().equals(workspace)).findFirst()
                 .orElse(workspaces.getItems().isEmpty() ? null : workspaces.getItems().getFirst()));
         updating = false; populateTree();
+        environments.setWorkspace(workspaces.getValue() == null ? null : workspaces.getValue().id());
         status.getStyleClass().removeAll("validation-error"); status.setText("Local storage ready. Double-click a request to open it.");
         if (!initializedTab && workspaces.getValue() != null) { initializedTab = true; newTab(); }
     }
@@ -174,6 +190,8 @@ public final class LibraryWindowController implements AutoCloseable {
                     workspaces.setValue(workspaces.getItems().stream().filter(item -> item.id().equals(workspace)).findFirst().orElse(null));
                 } finally { updating = false; }
                 populateTree(created.kind() == LibraryItem.Kind.WORKSPACE ? null : created.id());
+                environments.setWorkspace(workspace);
+                if (created.kind() == LibraryItem.Kind.WORKSPACE && initializedTab) activateWorkspaceTab(workspace);
             }
             done.run();
         });
@@ -294,12 +312,19 @@ public final class LibraryWindowController implements AutoCloseable {
         if (workspaces.getValue() == null) { status.setText("Create a workspace first."); return; }
         open(UUID.randomUUID(), workspaces.getValue().id(), "Untitled Request", RequestDraft.empty(), null, false);
     }
+    private void activateWorkspaceTab(UUID workspace) {
+        Entry current = active(); if (current != null && current.workspaceId.equals(workspace)) return;
+        var existing = entries.values().stream().filter(entry -> entry.workspaceId.equals(workspace)).findFirst();
+        if (existing.isPresent()) tabs.getSelectionModel().select(existing.get().tab); else newTab();
+    }
     private void open(UUID id, UUID workspace, String title, RequestDraft draft, SavedRequest saved, boolean dirty) {
         if (entries.containsKey(id)) { tabs.getSelectionModel().select(entries.get(id).tab); return; }
         if (entries.size() >= 100) { status.setText("Close a tab before opening more (maximum 100)."); return; }
         MainWindowController controller = new MainWindowController(engine); controller.requestEditorModel().load(draft);
         Tab tab = new Tab(); tab.setContent(controller.createRequestContent());
         Entry entry = new Entry(id, workspace, controller, tab, title, saved); tab.setUserData(entry);
+        controller.setVariableContext(() -> repository.loadVariables(entry.workspaceId).thenApply(values ->
+                new dev.apitestingplatform.application.http.VariableResolver.Context(values.variables(), values.selectedVariables())));
         tab.textProperty().bind(entry.title.concat(javafx.beans.binding.Bindings.when(controller.requestEditorModel().dirtyProperty()).then(" *").otherwise("")));
         controller.requestEditorModel().changesProperty().addListener((observable, before, after) -> {
             recoveryStatus.setText("Recovery pending…");
@@ -334,6 +359,7 @@ public final class LibraryWindowController implements AutoCloseable {
             entry.saving = false; if (closed) return;
             if (failure != null) { error(failure); return; }
             entry.saved = saved; entry.workspaceId = workspaceFor(saved.item()); entry.title.set(saved.item().name()); entry.editor.requestEditorModel().markSaved(revision);
+            if (active() == entry && byId(entry.workspaceId) != null) workspaces.setValue(byId(entry.workspaceId));
             if (!entry.editor.hasUnsavedEdits()) perform(autosave.clear(entry.tabId), ignored -> { });
             else autosave.changed(new RecoveryDraft(entry.tabId, saved.item().id(), entry.workspaceId, entry.title.get(), entry.editor.requestEditorModel().capture(), Instant.now()));
             refresh(); done.run();
@@ -413,6 +439,6 @@ public final class LibraryWindowController implements AutoCloseable {
         }));
     }
     @Override public void close() {
-        if (closed) return; closed = true; autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
+        if (closed) return; closed = true; environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
     }
 }

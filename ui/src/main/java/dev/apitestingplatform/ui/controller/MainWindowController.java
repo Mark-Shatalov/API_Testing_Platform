@@ -10,6 +10,7 @@ import dev.apitestingplatform.ui.viewmodel.RequestEditorViewModel;
 import dev.apitestingplatform.application.http.HttpExecutionEngine;
 import dev.apitestingplatform.application.http.RequestExecution;
 import dev.apitestingplatform.application.http.RequestValidation;
+import dev.apitestingplatform.application.http.VariableResolver;
 import dev.apitestingplatform.domain.http.RequestConfiguration;
 import dev.apitestingplatform.domain.http.RequestBody;
 import javafx.application.Platform;
@@ -17,6 +18,7 @@ import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Parent;
 import javafx.scene.control.Label;
+import javafx.scene.control.Button;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
@@ -46,6 +48,13 @@ public final class MainWindowController implements AutoCloseable {
     private ResponsePanel responsePanel;
     private RequestExecution active;
     private boolean closed;
+    private final Label target = new Label("Preview the resolved target before sending.");
+    private java.util.function.Supplier<CompletionStage<VariableResolver.Context>> variableContext =
+            () -> CompletableFuture.completedFuture(VariableResolver.Context.empty());
+
+    public void setVariableContext(java.util.function.Supplier<CompletionStage<VariableResolver.Context>> provider) {
+        variableContext = Objects.requireNonNull(provider);
+    }
 
     public MainWindowController() { this(null); }
     public MainWindowController(HttpExecutionEngine engine) { this.engine = engine; }
@@ -113,7 +122,11 @@ public final class MainWindowController implements AutoCloseable {
 
         editor = new RequestEditor(draft);
         VBox.setVgrow(editor, Priority.ALWAYS);
-        VBox requestEditor = new VBox(toolbar, RequestEditor.error(draft.urlError, "request-url-error"),
+        Button preview = new Button("Preview target"); preview.setId("request-preview-target");
+        preview.setOnAction(event -> prepareRequest(false)); preview.disableProperty().bind(viewModel.operationInProgressProperty());
+        target.setId("request-resolved-target"); target.setWrapText(true); HBox.setHgrow(target, Priority.ALWAYS);
+        HBox targetBar = new HBox(10, preview, target); targetBar.setAlignment(Pos.CENTER_LEFT); targetBar.getStyleClass().add("target-preview");
+        VBox requestEditor = new VBox(toolbar, targetBar, RequestEditor.error(draft.urlError, "request-url-error"),
                 RequestEditor.error(draft.summary, "request-validation-summary"), editor);
         requestEditor.setMinHeight(260);
         requestEditor.getStyleClass().add("request-editor");
@@ -145,35 +158,54 @@ public final class MainWindowController implements AutoCloseable {
     }
 
     private void onSendRequested() {
-        if (engine == null) { viewModel.showMessage("HTTP engine is unavailable."); return; }
+        prepareRequest(true);
+    }
+    private void prepareRequest(boolean send) {
+        if (send && engine == null) { viewModel.showMessage("HTTP engine is unavailable."); return; }
         if (viewModel.operationInProgressProperty().get() || closed) return;
         var snapshot = draft.snapshot();
         if (snapshot.isEmpty()) { viewModel.showMessage(draft.summary.get()); return; }
         RequestConfiguration configuration = snapshot.orElseThrow();
+        var localVariables = draft.variables.stream().map(RequestEditorViewModel.VariableRow::snapshot).toList();
+        CompletionStage<VariableResolver.Context> context;
+        try { context = variableContext.get(); }
+        catch (RuntimeException failure) { draft.variableError.set("Workspace variables are unavailable. Refresh and try again."); return; }
         long revision = draft.revision();
         long ticket = ++submission;
         viewModel.beginOperation();
+        target.setText("Preparing target…");
         viewModel.showMessage("Validating request…");
-        responsePanel.showLoading();
+        if (send) responsePanel.showLoading();
         try {
             pendingValidation = validation.submit(() -> {
                 java.util.List<RequestValidation.Issue> checked;
-                try { checked = RequestValidation.validate(configuration); }
+                VariableResolver.Resolved resolved = null;
+                try {
+                    resolved = VariableResolver.resolve(configuration, context.toCompletableFuture().get(10, TimeUnit.SECONDS), localVariables);
+                    checked = resolved.issues().isEmpty() ? RequestValidation.validate(resolved.request()) : resolved.issues();
+                } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+                catch (ExecutionException | TimeoutException failure) {
+                    checked = java.util.List.of(new RequestValidation.Issue("variables", "Workspace variables could not be loaded. Refresh environments and try again."));
+                }
                 catch (RuntimeException failure) {
                     checked = java.util.List.of(new RequestValidation.Issue("body", "The request could not be validated. Check its content and upload metadata."));
                 }
                 var issues = checked;
+                var prepared = resolved;
                 Platform.runLater(() -> {
                     if (closed || submission != ticket) return;
                     pendingValidation = null;
                     if (!issues.isEmpty()) {
+                        target.setText("Target unavailable — fix the marked fields.");
                         if (draft.revision() == revision) draft.showIssues(issues);
                         viewModel.finishOperation("Request not sent: validation failed."
                                 + (draft.revision() != revision ? " The editor has newer unsent edits." : " See the marked fields."));
-                        responsePanel.showValidationFailure("Request not sent — fix the validation errors in the editor.");
+                        if (send) responsePanel.showValidationFailure("Request not sent — fix the validation errors in the editor.");
                         return;
                     }
-                    execute(configuration, revision);
+                    target.setText("Target: " + prepared.preview());
+                    if (send) execute(prepared.request(), revision);
+                    else viewModel.finishOperation("Target preview ready. Secret variables are masked; no request was sent.");
                 });
             });
         } catch (RejectedExecutionException unavailable) {

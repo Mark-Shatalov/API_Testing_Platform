@@ -17,6 +17,9 @@ final class ProtectedDraftCodec {
         json.getFactory().setStreamReadConstraints(StreamReadConstraints.builder().maxNestingDepth(100).maxStringLength(LIMIT).build());
     }
     String encode(RequestDraft draft) throws Exception {
+        return encodeValue(draft);
+    }
+    String encodeValue(Object value) throws Exception {
         var output = new java.io.ByteArrayOutputStream() {
             void wipe() { Arrays.fill(buf, (byte) 0); reset(); }
             @Override public synchronized void write(byte[] data, int offset, int length) {
@@ -29,11 +32,14 @@ final class ProtectedDraftCodec {
         };
         byte[] plain = null;
         try {
-            json.writeValue(output, draft); plain = output.toByteArray();
+            json.writeValue(output, value); plain = output.toByteArray();
             return "{\"version\":1,\"protection\":\"current-user\",\"payload\":\"" + Base64.getEncoder().encodeToString(protector.protect(plain)) + "\"}";
         } finally { if (plain != null) Arrays.fill(plain, (byte) 0); output.wipe(); }
     }
     RequestDraft decode(String envelope) throws Exception {
+        return decodeValue(envelope, RequestDraft.class);
+    }
+    <T> T decodeValue(String envelope, Class<T> type) throws Exception {
         if (envelope.length() > LIMIT * 2) throw new IllegalArgumentException("Payload too large");
         var tree = json.readTree(envelope);
         if (tree.path("version").asInt() != 1 || !tree.path("protection").asText().equals("current-user"))
@@ -41,7 +47,7 @@ final class ProtectedDraftCodec {
         byte[] plain = protector.unprotect(Base64.getDecoder().decode(tree.path("payload").asText()));
         try {
             if (plain.length > LIMIT) throw new IllegalArgumentException("Payload too large");
-            return json.readValue(plain, RequestDraft.class);
+            return json.readValue(plain, type);
         } finally { Arrays.fill(plain, (byte) 0); }
     }
 }

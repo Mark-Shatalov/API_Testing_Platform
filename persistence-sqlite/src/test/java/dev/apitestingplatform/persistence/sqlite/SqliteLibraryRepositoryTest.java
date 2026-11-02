@@ -133,7 +133,7 @@ class SqliteLibraryRepositoryTest {
     @Test void migrationSuccessCreatesConsistentBackupAndFailureRollsBackSchemaAndData() throws Exception {
         var repository = open(); var parent = collection(repository); await(repository.shutdown());
         List<Migration> migrations = new ArrayList<>(Migrations.defaults());
-        migrations.add(new Migration(2, "CREATE TABLE extra(id TEXT); INSERT INTO extra VALUES('existing');", true));
+        migrations.add(new Migration(migrations.size() + 1, "CREATE TABLE extra(id TEXT); INSERT INTO extra VALUES('existing');", true));
         var upgraded = new SqliteLibraryRepository(file(), protector, migrations); repositories.add(upgraded); await(upgraded.ready()); await(upgraded.shutdown());
         try (var backups = Files.list(directory.resolve("migration-backups"))) {
             var files = backups.toList(); assertThat(files).hasSize(1);
@@ -141,13 +141,13 @@ class SqliteLibraryRepositoryTest {
                 assertThat(row.next()).isTrue(); assertThat(row.getInt(1)).isEqualTo(1);
             }
         }
-        var failureMigrations = new ArrayList<>(migrations); failureMigrations.add(new Migration(3, "CREATE TABLE should_rollback(id TEXT); THIS IS INVALID SQL;", true));
+        var failureMigrations = new ArrayList<>(migrations); failureMigrations.add(new Migration(migrations.size() + 1, "CREATE TABLE should_rollback(id TEXT); THIS IS INVALID SQL;", true));
         var failed = new SqliteLibraryRepository(file(), protector, failureMigrations); repositories.add(failed);
         assertThatThrownBy(() -> await(failed.ready())).hasCauseInstanceOf(StorageException.class); await(failed.shutdown());
         var restored = new SqliteLibraryRepository(file(), protector, migrations); repositories.add(restored); await(restored.ready());
         assertThat(await(restored.list())).extracting(LibraryItem::id).contains(parent.id());
         try (var db = DriverManager.getConnection("jdbc:sqlite:" + file()); var query = db.createStatement()) {
-            try (var row = query.executeQuery("SELECT max(version) FROM schema_version")) { assertThat(row.next()).isTrue(); assertThat(row.getInt(1)).isEqualTo(2); }
+            try (var row = query.executeQuery("SELECT max(version) FROM schema_version")) { assertThat(row.next()).isTrue(); assertThat(row.getInt(1)).isEqualTo(migrations.size()); }
             try (var row = query.executeQuery("SELECT count(*) FROM sqlite_master WHERE name='should_rollback'")) { assertThat(row.next()).isTrue(); assertThat(row.getInt(1)).isZero(); }
         }
     }

@@ -8,10 +8,14 @@ import java.util.*;
 
 final class Migrations {
     static List<Migration> defaults() throws java.io.IOException {
-        try (var source = Migrations.class.getResourceAsStream("V001__local_storage.sql")) {
-            if (source == null) throw new java.io.IOException("Missing schema resource");
-            return List.of(new Migration(1, new String(source.readAllBytes(), StandardCharsets.UTF_8), false));
+        List<Migration> migrations = new ArrayList<>();
+        for (String name : List.of("V001__local_storage.sql", "V002__environments.sql")) {
+            try (var source = Migrations.class.getResourceAsStream(name)) {
+                if (source == null) throw new java.io.IOException("Missing schema resource");
+                migrations.add(new Migration(migrations.size() + 1, new String(source.readAllBytes(), StandardCharsets.UTF_8), false));
+            }
         }
+        return List.copyOf(migrations);
     }
 
     static void apply(Connection db, Path file, List<Migration> migrations) throws Exception {

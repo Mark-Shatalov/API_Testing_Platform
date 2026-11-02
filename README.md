@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Phases 1–2 (steps 4–9) are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, and protected crash-recovery drafts. Environment resolution, assertions and collection execution are subsequent increments.
+Phases 1–2 (steps 4–9) and Phase 3 step 10 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments and variable resolution. Authentication helpers, assertions and collection execution are subsequent increments.
 
 ## Module structure
 
@@ -67,7 +67,19 @@ Complete request and recovery payloads are versioned JSON envelopes in TEXT colu
 
 `schema_version` records ordered SHA-256-checksummed migrations. Changed checksums or unknown schema versions are rejected without replacing data. Before an incompatible migration, `VACUUM INTO` creates a consistent backup under `migration-backups` next to the database; migration SQL and version registration are transactional and roll back on failure. Do not manually copy a live database without its WAL; close the app before file-level backup. Manual backup/restore UI belongs to a later phase.
 
-The schema also prepares environments, variables, assertions, runs, request results and assertion results. Their editors, execution and history are not implemented by Phase 2. See [Phase 2 implementation and verification](docs/phase-2-implementation.md).
+Environments and variables are implemented in step 10. The schema also prepares assertions, runs, request results and assertion results; their editors, execution and history remain future work. See [Phase 2 implementation and verification](docs/phase-2-implementation.md) and [Step 10 implementation](docs/step-10-environments.md).
+
+## Environments and variables
+
+The sidebar's **ENVIRONMENT** selector belongs to the selected workspace. **New**, **Edit**, and **Delete** manage named environments. Select **No environment** to use only workspace and request values. **Workspace variables…** edits defaults shared by requests in that workspace. Switching workspaces selects a request tab for that workspace, and selecting an existing tab restores its workspace. Unsaved tabs from other workspaces remain open. The selected environment is saved per workspace.
+
+In an environment, add `baseUrl = http://localhost:8080` and save. Select that environment, enter `{{baseUrl}}/posts/2` in the request URL, and use **Preview target** to inspect the resolved address without sending traffic. **Send** resolves and validates a fresh immutable snapshot again. The saved URL remains `{{baseUrl}}/posts/2`, so selecting another environment changes the destination without editing the saved template.
+
+The request editor's **Variables** tab contains request-local values, which are saved with that request and included in encrypted recovery drafts. Precedence is **request > selected environment > workspace**. Names are case-sensitive, start with a letter or underscore, and can contain letters, digits, dots, underscores and hyphens. Duplicate names within one scope are rejected. Each scope supports up to 256 variables and 1,048,576 combined name/value characters; individual values are limited to 65,536 characters. A workspace supports up to 100 environments.
+
+Placeholders resolve in the URL, enabled query/header/cookie rows, JSON/text bodies, URL-encoded fields and multipart text/metadata. File paths are kept as literal external-file references. Variable values can reference other variables; nested references follow the same precedence. Unknown required variables, cycles, malformed placeholders, excessive nesting/expansion and invalid resolved URLs or bodies stop the request before network traffic and mark the relevant fields. Use `\{{name}}` to send literal `{{name}}` text. Substitution is textual: JSON values must still form valid JSON after substitution, and URL path values must already use appropriate URL encoding. Structured query/form values are encoded by the existing HTTP engine.
+
+Mark confidential variables **Secret**. Their values are hidden in the editor unless **Show secret values** is selected. Preview masks secret substitutions as `[secret]` (URL-encoded in structured query values), including values derived from secret variables. A preview is a snapshot: prepare it again after changing inputs or environments. Every Send prepares its own target. Environment/workspace values, including ordinary values, are protected with current-user Windows DPAPI on disk. Names, secret flags and environment metadata are not encrypted. No resolved values are written back into saved templates or logged. Existing response viewing remains a debugging view and can display data echoed by the server.
 
 ## HTTP engine
 
@@ -93,6 +105,7 @@ Enter an absolute HTTP(S) URL, select the method, configure the editor tabs, and
 - Body: None, Raw JSON, Text, x-www-form-urlencoded, or multipart/form-data. Forms use UTF-8 URL encoding. Multipart supports Add text part and Add file, editable field names and file media types. Files stream from disk off the JavaFX thread; the request limit includes multipart framing. File paths and content must remain accessible until sending finishes, including redirects.
 - Format JSON validates and formats on a bounded worker. Syntax errors identify line and column. Formatting has depth and output limits; stale formatting never overwrites newer edits.
 - Settings: timeout in seconds (including fractional seconds, positive and at most 86400), redirect policy, and preferred HTTP version.
+- Variables: request-local ordinary or secret values used by template resolution.
 - Auth and Tests explicitly identify future-phase functionality. Explicit Authorization headers already work via Headers; no JavaScript is executed.
 
 Validation runs before network traffic. Invalid URLs, JSON, HEAD bodies, cookie/header injection, transport-managed headers, and unsafe multipart metadata produce field/row-level errors. Invalid upload files are rejected by infrastructure before HTTP dispatch. Validation messages do not echo request secrets. A HEAD request must use None; GET bodies are allowed but may be rejected by individual servers.
