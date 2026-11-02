@@ -75,7 +75,7 @@ class EnvironmentRepositoryTest {
         var request = await(old.createRequest(collection.id(), "Saved", RequestDraft.empty())); await(old.shutdown());
         // Simulate an actual old JSON payload whose request-local variables field does not exist.
         var json = new com.fasterxml.jackson.databind.ObjectMapper();
-        var tree = json.valueToTree(RequestDraft.empty()); ((com.fasterxml.jackson.databind.node.ObjectNode) tree).remove("variables");
+        var tree = json.valueToTree(RequestDraft.empty()); ((com.fasterxml.jackson.databind.node.ObjectNode) tree).remove(List.of("variables", "authentication"));
         try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + file); var update = db.prepareStatement("UPDATE requests SET payload_json=? WHERE id=?")) {
             update.setString(1, new ProtectedDraftCodec(protector).encodeValue(tree)); update.setString(2, request.item().id().toString()); update.executeUpdate();
         }

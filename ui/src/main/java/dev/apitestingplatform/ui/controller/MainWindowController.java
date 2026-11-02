@@ -167,6 +167,7 @@ public final class MainWindowController implements AutoCloseable {
         if (snapshot.isEmpty()) { viewModel.showMessage(draft.summary.get()); return; }
         RequestConfiguration configuration = snapshot.orElseThrow();
         var localVariables = draft.variables.stream().map(RequestEditorViewModel.VariableRow::snapshot).toList();
+        var authentication = draft.authentication();
         CompletionStage<VariableResolver.Context> context;
         try { context = variableContext.get(); }
         catch (RuntimeException failure) { draft.variableError.set("Workspace variables are unavailable. Refresh and try again."); return; }
@@ -181,7 +182,7 @@ public final class MainWindowController implements AutoCloseable {
                 java.util.List<RequestValidation.Issue> checked;
                 VariableResolver.Resolved resolved = null;
                 try {
-                    resolved = VariableResolver.resolve(configuration, context.toCompletableFuture().get(10, TimeUnit.SECONDS), localVariables);
+                    resolved = VariableResolver.resolve(configuration, context.toCompletableFuture().get(10, TimeUnit.SECONDS), localVariables, authentication);
                     checked = resolved.issues().isEmpty() ? RequestValidation.validate(resolved.request()) : resolved.issues();
                 } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
                 catch (ExecutionException | TimeoutException failure) {

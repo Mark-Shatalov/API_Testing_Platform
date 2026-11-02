@@ -12,7 +12,8 @@ public final class VariableResolver {
         public Context { workspace = List.copyOf(workspace); environment = List.copyOf(environment); }
         public static Context empty() { return new Context(List.of(), List.of()); }
     }
-    public record Resolved(RequestConfiguration request, String preview, List<RequestValidation.Issue> issues) {
+    public record Resolved(RequestConfiguration request, String preview, List<RequestValidation.Issue> issues, SecretRedactor redactor) {
+        public Resolved(RequestConfiguration request, String preview, List<RequestValidation.Issue> issues) { this(request, preview, issues, SecretRedactor.empty()); }
         public Resolved { issues = List.copyOf(issues); }
         @Override public String toString() { return preview; }
     }
@@ -21,17 +22,24 @@ public final class VariableResolver {
     private final Map<String, Value> cache = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
     private final List<RequestValidation.Issue> issues = new ArrayList<>();
+    private final Set<String> secrets = new HashSet<>(), sensitiveHeaders = new HashSet<>(), sensitiveQuery = new HashSet<>();
     private int budget = 32 * 1024 * 1024;
 
     private VariableResolver(Context context, List<Variable> local) {
         for (var scope : List.of(context.workspace(), context.environment(), local)) {
-            Variable.validate(scope); scope.forEach(variable -> variables.put(variable.name(), variable));
+            Variable.validate(scope); scope.forEach(variable -> {
+                variables.put(variable.name(), variable); if (variable.secret()) secrets.add(variable.value());
+            });
         }
     }
     public static Resolved resolve(RequestConfiguration template, Context context, List<Variable> local) {
+        return resolve(template, context, local, Authentication.none());
+    }
+    public static Resolved resolve(RequestConfiguration template, Context context, List<Variable> local, Authentication authentication) {
         VariableResolver resolver;
         try { resolver = new VariableResolver(context, local); }
         catch (IllegalArgumentException invalid) { return new Resolved(template, "", List.of(new RequestValidation.Issue("variables", invalid.getMessage()))); }
+        resolver.sensitiveHeaders.addAll(template.sensitiveHeaderNames()); resolver.sensitiveQuery.addAll(template.sensitiveQueryNames());
         Value url = resolver.field(template.url(), "url");
         List<RequestField> params = resolver.fields(template.queryParameters(), "params", false);
         List<RequestField> maskedParams = resolver.fields(template.queryParameters(), "params", true);
@@ -50,18 +58,48 @@ public final class VariableResolver {
         };
         RequestConfiguration request = new RequestConfiguration(template.method(), url.text(), params,
                 resolver.fields(template.headers(), "headers", false), resolver.fields(template.cookies(), "cookies", false),
-                resolvedBody, template.timeout(), template.redirects(), template.protocol());
+                resolvedBody, template.timeout(), template.redirects(), template.protocol(), resolver.sensitiveHeaders, resolver.sensitiveQuery);
+        Authentication auth = resolver.authentication(authentication);
+        resolver.secrets.addAll(List.of(authentication.bearerToken(), authentication.username(), authentication.password(), authentication.keyValue()));
+        if (resolver.issues.isEmpty()) {
+            var applied = AuthenticationApplier.apply(request, auth); resolver.issues.addAll(applied.issues()); resolver.secrets.addAll(applied.secrets()); request = applied.request();
+            if (request.queryParameters().size() > maskedParams.size()) {
+                maskedParams = new ArrayList<>(maskedParams); maskedParams.add(new RequestField(auth.keyName(), "[secret]"));
+            }
+        }
+        // Literal credential headers/cookies must not escape into summaries either.
+        for (RequestField header : request.headers()) if (Set.of("authorization", "proxy-authorization", "cookie", "set-cookie").contains(header.name().toLowerCase(Locale.ROOT)))
+            resolver.secrets.add(header.value());
+        request.cookies().forEach(cookie -> resolver.secrets.add(cookie.value()));
+        SecretRedactor redactor = new SecretRedactor(resolver.secrets, request.sensitiveHeaderNames(), request.sensitiveQueryNames());
         String base = url.masked().split("#", 2)[0];
         String query = String.join("&", maskedParams.stream().filter(RequestField::enabled)
                 .map(value -> encode(value.name()) + "=" + encode(value.value())).toList());
         if (!query.isEmpty()) base += (base.contains("?") ? base.endsWith("?") ? "" : "&" : "?") + query;
-        return new Resolved(request, base, resolver.issues.stream().distinct().toList());
+        return new Resolved(request, redactor.url(base), resolver.issues.stream().distinct().toList(), redactor);
+    }
+    private Authentication authentication(Authentication auth) {
+        return switch (auth.mode()) {
+            case NONE -> Authentication.none();
+            case BEARER -> new Authentication(auth.mode(), authValue(auth.bearerToken()), "", "", "", "", auth.placement());
+            case BASIC -> new Authentication(auth.mode(), "", authValue(auth.username()), authValue(auth.password()), "", "", auth.placement());
+            case API_KEY -> new Authentication(auth.mode(), "", "", "", authValue(auth.keyName()), authValue(auth.keyValue()), auth.placement());
+        };
+    }
+    private String authValue(String template) {
+        String value = field(template, "auth").text();
+        if (value.length() > 65536) { issues.add(new RequestValidation.Issue("auth", "Resolved authentication field exceeds the size limit.")); return ""; }
+        return value;
     }
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20"); }
     private List<RequestField> fields(List<RequestField> fields, String prefix, boolean masked) {
         return java.util.stream.IntStream.range(0, fields.size()).mapToObj(index -> {
             RequestField field = fields.get(index); if (!field.enabled()) return field;
             Value name = field(field.name(), prefix + "." + index), value = field(field.value(), prefix + "." + index);
+            if (!masked && (name.secret() || value.secret())) {
+                if (prefix.equals("headers")) sensitiveHeaders.add(name.text());
+                if (prefix.equals("params")) sensitiveQuery.add(name.text());
+            }
             return new RequestField(masked ? name.masked() : name.text(), masked ? value.masked() : value.text(), true);
         }).toList();
     }
@@ -77,6 +115,7 @@ public final class VariableResolver {
         try {
             Value expanded = expand(variable.value(), depth + 1);
             boolean secret = variable.secret() || expanded.secret();
+            if (secret) secrets.add(expanded.text());
             Value value = new Value(expanded.text(), secret ? "[secret]" : expanded.masked(), secret);
             cache.put(name, value); return value;
         } finally { visiting.remove(name); }

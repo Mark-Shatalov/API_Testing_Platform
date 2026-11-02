@@ -20,6 +20,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -154,7 +156,7 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
                         .method(method.name(), body.publisher());
                 for (RequestField header : configuration.headers()) {
                     if (!header.enabled()) continue;
-                    if (stripCredentials && sensitive(header.name())) continue;
+                    if (stripCredentials && (sensitive(header.name()) || configuration.sensitiveHeaderNames().contains(header.name().toLowerCase(Locale.ROOT)))) continue;
                     if (dropBodyHeaders && bodyHeader(header.name())) continue;
                     builder.header(header.name(), header.value());
                 }
@@ -196,8 +198,10 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
                             }
                             boolean rewrite = (status == 303 && method != HttpMethod.HEAD)
                                     || ((status == 301 || status == 302) && method == HttpMethod.POST);
+                            boolean strip = stripCredentials || !sameOrigin(uri, target);
+                            if (strip) target = stripSecretQuery(target, configuration.sensitiveQueryNames());
                             send(target, rewrite ? HttpMethod.GET : method, rewrite ? RequestBodyEncoder.Encoded.empty() : body,
-                                    stripCredentials || !sameOrigin(uri, target), dropBodyHeaders || rewrite, redirects + 1);
+                                    strip, dropBodyHeaders || rewrite, redirects + 1);
                         } else complete(response);
                     } catch (IllegalArgumentException invalid) {
                         fail(NetworkError.Type.INVALID_REQUEST);
@@ -304,6 +308,15 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+    private static URI stripSecretQuery(URI uri, Set<String> names) {
+        if (names.isEmpty() || uri.getRawQuery() == null) return uri;
+        String query = String.join("&", Arrays.stream(uri.getRawQuery().split("&")).filter(part -> {
+            try { return !names.contains(java.net.URLDecoder.decode(part.split("=", 2)[0], StandardCharsets.UTF_8)); }
+            catch (IllegalArgumentException malformed) { return false; }
+        }).toList());
+        String base = uri.toASCIIString().split("[?#]", 2)[0];
+        return URI.create(base + (query.isEmpty() ? "" : "?" + query));
     }
 
     private static String cookie(RequestField cookie) {

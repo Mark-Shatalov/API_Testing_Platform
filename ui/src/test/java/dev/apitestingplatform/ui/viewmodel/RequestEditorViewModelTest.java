@@ -9,6 +9,17 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class RequestEditorViewModelTest {
+    @Test void authModesRoundTripIncludingInactiveValuesAndEveryEditMarksTheDraftDirty() {
+        var model = new RequestEditorViewModel(new MainWindowViewModel());
+        model.authMode.set(Authentication.Mode.BEARER); model.bearerToken.set("{{token}}"); model.authUsername.set("retained-user");
+        model.authPassword.set("retained-password"); model.apiKeyName.set("custom_key"); model.apiKeyValue.set("retained-key"); model.authPlacement.set(Authentication.Placement.QUERY);
+        var saved = model.capture(); var restored = new RequestEditorViewModel(new MainWindowViewModel()); restored.load(saved);
+        assertThat(restored.authentication()).isEqualTo(saved.authentication()); assertThat(restored.dirtyProperty().get()).isFalse();
+        restored.authMode.set(Authentication.Mode.NONE); assertThat(restored.dirtyProperty().get()).isTrue();
+        assertThat(restored.bearerToken.get()).isEqualTo("{{token}}"); assertThat(restored.authPassword.get()).isEqualTo("retained-password");
+        restored.showIssues(List.of(new RequestValidation.Issue("auth", "Invalid authentication")));
+        assertThat(restored.authError.get()).isEqualTo("Invalid authentication");
+    }
     @Test void loadCaptureRoundTripsInvalidDraftAndEveryRapidChangeAdvancesRevision() {
         MainWindowViewModel main = new MainWindowViewModel(); var draft = new RequestEditorViewModel(main);
         main.requestUrlProperty().set("unfinished url"); draft.bodyText.set("{broken}"); draft.timeout.set("invalid");

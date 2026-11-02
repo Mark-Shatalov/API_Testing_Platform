@@ -26,6 +26,12 @@ public final class RequestEditorViewModel {
     }
     public final ObservableList<VariableRow> variables = FXCollections.observableArrayList(row -> new Observable[]{row.name, row.value, row.secret});
     public final StringProperty variableError = new SimpleStringProperty("");
+    public final ObjectProperty<Authentication.Mode> authMode = new SimpleObjectProperty<>(Authentication.Mode.NONE);
+    public final ObjectProperty<Authentication.Placement> authPlacement = new SimpleObjectProperty<>(Authentication.Placement.HEADER);
+    public final StringProperty bearerToken = new SimpleStringProperty(""), authUsername = new SimpleStringProperty(""),
+            authPassword = new SimpleStringProperty(""), apiKeyName = new SimpleStringProperty("X-API-Key"), apiKeyValue = new SimpleStringProperty("");
+    public final StringProperty authError = new SimpleStringProperty("");
+    public Authentication authentication() { return new Authentication(authMode.get(), bearerToken.get(), authUsername.get(), authPassword.get(), apiKeyName.get(), apiKeyValue.get(), authPlacement.get()); }
     public static final class Row {
         public final BooleanProperty enabled = new SimpleBooleanProperty(true);
         public final StringProperty name = new SimpleStringProperty("");
@@ -63,7 +69,8 @@ public final class RequestEditorViewModel {
 
     public RequestEditorViewModel(MainWindowViewModel main) {
         this.main = main;
-        for (Observable value : List.of(variables, params, headers, cookies, form, multipart, bodyType, bodyText,
+        for (Observable value : List.of(authMode, authPlacement, bearerToken, authUsername, authPassword, apiKeyName, apiKeyValue,
+                variables, params, headers, cookies, form, multipart, bodyType, bodyText,
                 timeout, redirects, protocol, main.requestUrlProperty(), main.requestMethodProperty())) {
             value.addListener(ignored -> {
                 // Validate observable values so successive edits notify even without an attached control.
@@ -87,7 +94,7 @@ public final class RequestEditorViewModel {
                 params.stream().map(Row::snapshot).toList(), headers.stream().map(Row::snapshot).toList(),
                 cookies.stream().map(Row::snapshot).toList(), bodyType.get(), bodyText.get(), form.stream().map(Row::snapshot).toList(),
                 multipart.stream().map(row -> new RequestDraft.Part(row.name.get(), row.value.get(), row.file.get(), row.contentType.get(), row.enabled.get())).toList(),
-                timeout.get(), redirects.get(), protocol.get(), variables.stream().map(VariableRow::snapshot).toList());
+                timeout.get(), redirects.get(), protocol.get(), variables.stream().map(VariableRow::snapshot).toList(), authentication());
     }
     public void load(RequestDraft saved) {
         loading = true;
@@ -95,6 +102,8 @@ public final class RequestEditorViewModel {
             main.requestMethodProperty().set(HttpMethodOption.valueOf(saved.method().name())); main.requestUrlProperty().set(saved.url());
             loadRows(params, saved.params()); loadRows(headers, saved.headers()); loadRows(cookies, saved.cookies()); loadRows(form, saved.form());
             variables.setAll(saved.variables().stream().map(VariableRow::new).toList());
+            Authentication auth = saved.authentication(); authMode.set(auth.mode()); authPlacement.set(auth.placement());
+            bearerToken.set(auth.bearerToken()); authUsername.set(auth.username()); authPassword.set(auth.password()); apiKeyName.set(auth.keyName()); apiKeyValue.set(auth.keyValue());
             multipart.setAll(saved.multipart().stream().map(part -> {
                 Row row = new Row(part.name(), part.value(), part.enabled()); row.file.set(part.file()); row.contentType.set(part.contentType()); return row;
             }).toList());
@@ -149,7 +158,7 @@ public final class RequestEditorViewModel {
     }
 
     public void clearErrors() {
-        urlError.set(""); bodyError.set(""); timeoutError.set(""); variableError.set(""); summary.set("");
+        urlError.set(""); bodyError.set(""); timeoutError.set(""); variableError.set(""); authError.set(""); summary.set("");
         for (var rows : List.of(params, headers, cookies, form, multipart)) rows.forEach(row -> row.error.set(""));
     }
 
@@ -159,6 +168,7 @@ public final class RequestEditorViewModel {
             switch (issue.field()) {
                 case "url" -> urlError.set(issue.message());
                 case "variables" -> variableError.set(issue.message());
+                case "auth" -> authError.set(issue.message());
                 case "body" -> bodyError.set(bodyError.get().isEmpty() ? issue.message() : bodyError.get() + "\n" + issue.message());
                 default -> {
                     String[] field = issue.field().split("\\.");

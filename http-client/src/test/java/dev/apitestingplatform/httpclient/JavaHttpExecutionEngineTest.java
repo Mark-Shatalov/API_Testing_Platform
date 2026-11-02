@@ -31,6 +31,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 class JavaHttpExecutionEngineTest {
     @TempDir Path directory;
 
+    @Test void stripsCustomAuthHeadersAndSecretQueryOnCrossOriginRedirects() throws Exception {
+        try (MockWebServer source = new MockWebServer(); MockWebServer destination = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
+            destination.enqueue(new MockResponse().setBody("ok"));
+            source.enqueue(new MockResponse().setResponseCode(302).addHeader("Location", destination.url("/next?custom_key=private-marker&public=ok").toString()));
+            var request = new RequestConfiguration(HttpMethod.GET, source.url("/start").toString(), List.of(new RequestField("custom_key", "private-marker")),
+                    List.of(new RequestField("X-Custom-Auth", "private-marker")), List.of(), RequestBody.none(), Duration.ofSeconds(5), RedirectPolicy.ALWAYS, HttpProtocol.HTTP_1_1,
+                    java.util.Set.of("x-custom-auth"), java.util.Set.of("custom_key"));
+            assertThat(await(engine.execute(request)).statusCode()).isEqualTo(200);
+            var original = source.takeRequest(2, TimeUnit.SECONDS); assertThat(original.getHeader("X-Custom-Auth")).isEqualTo("private-marker");
+            assertThat(original.getPath()).contains("custom_key=private-marker");
+            var redirected = destination.takeRequest(2, TimeUnit.SECONDS); assertThat(redirected.getHeader("X-Custom-Auth")).isNull();
+            assertThat(redirected.getPath()).isEqualTo("/next?public=ok");
+        }
+    }
+
+    @Test void preservesCustomAuthOnSameOriginRedirect() throws Exception {
+        try (MockWebServer server = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
+            server.enqueue(new MockResponse().setResponseCode(302).addHeader("Location", "/next?custom_key=private-marker")); server.enqueue(new MockResponse());
+            var request = new RequestConfiguration(HttpMethod.GET, server.url("/start").toString(), List.of(), List.of(new RequestField("X-Custom-Auth", "private-marker")),
+                    List.of(), RequestBody.none(), Duration.ofSeconds(5), RedirectPolicy.NORMAL, HttpProtocol.HTTP_1_1, java.util.Set.of("x-custom-auth"), java.util.Set.of("custom_key"));
+            assertThat(await(engine.execute(request)).statusCode()).isEqualTo(200); server.takeRequest(2, TimeUnit.SECONDS);
+            var redirected = server.takeRequest(2, TimeUnit.SECONDS); assertThat(redirected.getHeader("X-Custom-Auth")).isEqualTo("private-marker");
+            assertThat(redirected.getPath()).contains("custom_key=private-marker");
+        }
+    }
+
     @Test void sendsUrlEncodedFormsAndIgnoresDisabledRowsEverywhere() throws Exception {
         try (MockWebServer server = new MockWebServer(); JavaHttpExecutionEngine engine = new JavaHttpExecutionEngine()) {
             server.enqueue(new MockResponse().setBody("ok"));

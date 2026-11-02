@@ -8,7 +8,12 @@ import java.util.Objects;
 /** Editable, possibly incomplete state; all body-mode drafts survive saving and crash recovery. */
 public record RequestDraft(HttpMethod method, String url, List<RequestField> params, List<RequestField> headers,
         List<RequestField> cookies, RequestBody.Type bodyType, String bodyText, List<RequestField> form,
-        List<Part> multipart, String timeout, RedirectPolicy redirects, HttpProtocol protocol, List<Variable> variables) {
+        List<Part> multipart, String timeout, RedirectPolicy redirects, HttpProtocol protocol, List<Variable> variables, Authentication authentication) {
+    public RequestDraft(HttpMethod method, String url, List<RequestField> params, List<RequestField> headers,
+            List<RequestField> cookies, RequestBody.Type bodyType, String bodyText, List<RequestField> form,
+            List<Part> multipart, String timeout, RedirectPolicy redirects, HttpProtocol protocol, List<Variable> variables) {
+        this(method, url, params, headers, cookies, bodyType, bodyText, form, multipart, timeout, redirects, protocol, variables, Authentication.none());
+    }
     public RequestDraft(HttpMethod method, String url, List<RequestField> params, List<RequestField> headers,
             List<RequestField> cookies, RequestBody.Type bodyType, String bodyText, List<RequestField> form,
             List<Part> multipart, String timeout, RedirectPolicy redirects, HttpProtocol protocol) {
@@ -23,6 +28,7 @@ public record RequestDraft(HttpMethod method, String url, List<RequestField> par
         params = List.copyOf(params); headers = List.copyOf(headers); cookies = List.copyOf(cookies);
         form = List.copyOf(form); multipart = List.copyOf(multipart);
         variables = variables == null ? List.of() : List.copyOf(variables);
+        authentication = authentication == null ? Authentication.none() : authentication;
         if (variables.size() > 256) throw new IllegalArgumentException("Too many request variables");
         if (params.size() > 1000 || headers.size() > 1000 || cookies.size() > 1000 || form.size() > 1000 || multipart.size() > 1000
                 || bodyText.length() > 8 * 1024 * 1024) throw new IllegalArgumentException("Draft exceeds editor limits");

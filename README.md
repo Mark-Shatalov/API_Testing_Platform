@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Phases 1–2 (steps 4–9) and Phase 3 step 10 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments and variable resolution. Authentication helpers, assertions and collection execution are subsequent increments.
+Phases 1–2 (steps 4–9) and Phase 3 (steps 10–11) are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution and authentication helpers. Assertions and collection execution are subsequent increments.
 
 ## Module structure
 
@@ -81,6 +81,20 @@ Placeholders resolve in the URL, enabled query/header/cookie rows, JSON/text bod
 
 Mark confidential variables **Secret**. Their values are hidden in the editor unless **Show secret values** is selected. Preview masks secret substitutions as `[secret]` (URL-encoded in structured query values), including values derived from secret variables. A preview is a snapshot: prepare it again after changing inputs or environments. Every Send prepares its own target. Environment/workspace values, including ordinary values, are protected with current-user Windows DPAPI on disk. Names, secret flags and environment metadata are not encrypted. No resolved values are written back into saved templates or logged. Existing response viewing remains a debugging view and can display data echoed by the server.
 
+## Authentication and secret handling
+
+The request **Auth** tab supports **No auth**, **Bearer Token**, **Basic Auth**, and **API Key** in a header or query parameter. Enter literal values or templates such as `{{token}}`; the same request > environment > workspace precedence applies. Tokens, passwords and key values are password fields by default. **Show credentials** reveals them explicitly. Switching modes retains inactive drafts, but only the selected mode is resolved or sent. Save and crash recovery protect all authentication settings inside the existing current-user DPAPI payload, with no plaintext fallback. Old saved requests default to No auth.
+
+Bearer fields accept the token only, without the `Bearer` prefix. Basic Auth uses UTF-8 before Base64 encoding; usernames cannot contain a colon and neither username nor password can contain control characters. API Key requires a name and non-empty value; transport-managed/invalid header names and unsupported header characters are rejected. An enabled manual header/query parameter conflicting with the Auth helper is rejected rather than overwritten. In No auth mode, explicit Authorization headers in Headers still work.
+
+Preview and Send resolve authentication on a background worker without changing saved templates. The target preview hides literal API keys as well as secret variables and secret-derived values. Missing variables and invalid/conflicting auth mark the Auth tab before any traffic. Header credentials are applied only to the immutable execution snapshot. API key values in structured query parameters use the existing URL encoding.
+
+On a cross-origin redirect, generated custom API key headers and headers containing secret variables are stripped alongside Authorization/Proxy-Authorization/Cookie. Query parameters identified as credentials are removed from a cross-origin redirect target, and remain stripped on subsequent redirects. Same-origin redirects retain header credentials and follow the server's query string. TLS certificate and hostname verification remain enabled; no bypass setting is provided.
+
+The shared `SecretRedactor` masks Authorization, Proxy-Authorization, Cookie, Set-Cookie, custom authentication fields and known secret values at text/header/URL boundaries. `RedactedRequestSummary` provides a non-portable diagnostic JSON codec that omits bodies and cookie/query values and redacts credential headers/URLs. Its tests verify that ordinary summaries contain no credential plaintext. History, logging/diagnostic archives and portable import/export user flows remain later steps; those flows must use this boundary. No imported scripts are executed. The interactive response viewer and explicit Save Response still show/save actual server data, which can include echoed credentials.
+
+See [Step 11 implementation and verification](docs/step-11-authentication.md).
+
 ## HTTP engine
 
 `JavaHttpExecutionEngine` implements the application module's `HttpExecutionEngine` port and uses Java 25 `HttpClient.sendAsync`. Construct one engine during background startup, reuse it, and close it on shutdown. Calls to `execute` return immediately with a `RequestExecution` handle; its `result()` stage completes with an immutable `ExecutionResult`. Use `cancel()` on the handle to cancel transport work. Cancelling a copy returned by `result().toCompletableFuture()` does not cancel transport work.
@@ -106,7 +120,7 @@ Enter an absolute HTTP(S) URL, select the method, configure the editor tabs, and
 - Format JSON validates and formats on a bounded worker. Syntax errors identify line and column. Formatting has depth and output limits; stale formatting never overwrites newer edits.
 - Settings: timeout in seconds (including fractional seconds, positive and at most 86400), redirect policy, and preferred HTTP version.
 - Variables: request-local ordinary or secret values used by template resolution.
-- Auth and Tests explicitly identify future-phase functionality. Explicit Authorization headers already work via Headers; no JavaScript is executed.
+- Auth: No auth, Bearer Token, Basic Auth and API Key helpers with optional variables and hidden credentials. Tests remains future-phase functionality; no JavaScript is executed.
 
 Validation runs before network traffic. Invalid URLs, JSON, HEAD bodies, cookie/header injection, transport-managed headers, and unsafe multipart metadata produce field/row-level errors. Invalid upload files are rejected by infrastructure before HTTP dispatch. Validation messages do not echo request secrets. A HEAD request must use None; GET bodies are allowed but may be rejected by individual servers.
 
