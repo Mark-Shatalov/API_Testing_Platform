@@ -24,6 +24,9 @@ public final class LibraryWindowController implements AutoCloseable {
     private final LibraryRepository repository;
     private final HttpExecutionEngine engine;
     private final DraftAutosave autosave;
+    private final HistoryService history;
+    private final dev.apitestingplatform.importexport.TransferFiles transferFiles = new dev.apitestingplatform.importexport.TransferFiles();
+    private HistoryWindow historyWindow;
     private final dev.apitestingplatform.application.run.CollectionRunner collectionRunner;
     private CollectionRunWindow runWindow;
     private final EnvironmentControls environments;
@@ -64,7 +67,8 @@ public final class LibraryWindowController implements AutoCloseable {
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository) { this(engine, repository, true); }
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository, boolean offerRecovery) {
         this.engine = engine; this.repository = Objects.requireNonNull(repository); this.offerRecovery = offerRecovery;
-        collectionRunner = engine == null ? null : new dev.apitestingplatform.application.run.CollectionRunner(engine);
+        history = new HistoryService(repository);
+        collectionRunner = engine == null ? null : new dev.apitestingplatform.application.run.CollectionRunner(engine, history);
         environments = new EnvironmentControls(repository);
         autosave = new DraftAutosave(repository, Duration.ofMillis(750), failure -> Platform.runLater(() -> {
             if (!closed) { recoveryStatus.setText("Recovery save failed — use Retry recovery save"); error(failure); }
@@ -124,7 +128,9 @@ public final class LibraryWindowController implements AutoCloseable {
                 button("Retry recovery save", "library-retry-drafts", this::retryDrafts),
                 button("Recover tabs…", "library-recover", this::offerRecovery),
                 button("Appearance…", "library-appearance", () -> appearanceAction.run()),
-                button("Clear temporary variables", "library-clear-temporary", this::clearTemporaryVariables));
+                button("Clear temporary variables", "library-clear-temporary", this::clearTemporaryVariables),
+                button("History…", "library-history", this::showHistory), button("Export workspace…", "library-export-workspace", this::exportWorkspace),
+                button("Import workspace…", "library-import-workspace", this::importWorkspace));
         recoveryStatus.setId("library-autosave-status"); toolbar.getChildren().add(recoveryStatus);
         toolbar.getStyleClass().add("library-toolbar");
         status.setId("library-status"); status.setWrapText(true); status.getStyleClass().add("status-bar");
@@ -300,6 +306,40 @@ public final class LibraryWindowController implements AutoCloseable {
         int target = selected.position() + delta; if (target < 0 || target >= count) return;
         perform(repository.reorder(selected.id(), target), ignored -> refresh());
     }
+    public void showHistory() {
+        if (historyWindow == null || !historyWindow.isShowing()) historyWindow = new HistoryWindow(root.getScene().getWindow(), repository, history, transferFiles);
+        historyWindow.show();
+    }
+    public CompletionStage<Void> exportWorkspace(UUID workspace, java.nio.file.Path path, boolean includeSecrets) {
+        return repository.exportWorkspace(workspace).thenCompose(snapshot -> transferFiles.workspace(path, snapshot, includeSecrets));
+    }
+    public CompletionStage<UUID> importWorkspace(java.nio.file.Path path) {
+        return transferFiles.read(path).thenCompose(document -> repository.importWorkspace(document.workspace()));
+    }
+    private void exportWorkspace() {
+        LibraryItem workspace = workspaces.getValue(); if (workspace == null) { status.setText("Select a workspace to export."); return; }
+        Dialog<Boolean> options = new Dialog<>(); options.initOwner(root.getScene().getWindow()); options.setTitle("Export workspace"); options.setHeaderText("Export the saved workspace as a portable JSON file");
+        CheckBox secrets = new CheckBox("Include secret values and request payloads in plain text"); secrets.setId("transfer-include-secrets");
+        Label hint = new Label("Export saved collections, requests, environments and rules. Secret values and request payloads are omitted by default; missing inputs appear as {{REDACTED}}. Names, endpoints and non-secret variables remain. Save edits first. Enable the option below only if this file must include credentials, body drafts and upload paths in plain text."); hint.setWrapText(true); hint.setPrefWidth(640); hint.setMinHeight(100);
+        VBox body = new VBox(12, hint, secrets); body.setPrefWidth(640); options.getDialogPane().setContent(body); options.getDialogPane().setPrefSize(720, 300); options.getDialogPane().setId("workspace-export-options");
+        ButtonType write = new ButtonType("Choose file…", ButtonBar.ButtonData.OK_DONE); options.getDialogPane().getButtonTypes().addAll(write, ButtonType.CANCEL); Button chooseFile = (Button) options.getDialogPane().lookupButton(write); chooseFile.setPrefWidth(130); chooseFile.setMinWidth(130); ButtonBar.setButtonUniformSize(chooseFile, false);
+        options.setResultConverter(button -> button == write ? secrets.isSelected() : null); var choice = options.showAndWait(); if (choice.isEmpty()) return;
+        javafx.stage.FileChooser chooser = new javafx.stage.FileChooser(); chooser.setTitle("Export saved workspace"); chooser.setInitialFileName("workspace.json"); chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("API Testing Platform workspace", "*.json"));
+        var destination = chooser.showSaveDialog(root.getScene().getWindow()); if (destination == null) return; status.setText("Exporting saved workspace…");
+        exportWorkspace(workspace.id(), destination.toPath(), choice.get()).whenComplete((ignored, failure) -> Platform.runLater(() -> { if (!closed) status.setText(failure == null ? choice.get() ? "Workspace exported with secret values in plain text." : "Workspace exported with sensitive inputs omitted." : "Workspace export failed or exceeded limits. The previous destination was not replaced."); }));
+    }
+    private void importWorkspace() {
+        javafx.stage.FileChooser chooser = new javafx.stage.FileChooser(); chooser.setTitle("Import as a new workspace copy"); chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("API Testing Platform workspace version 1", "*.json"));
+        var source = chooser.showOpenDialog(root.getScene().getWindow()); if (source == null) return; status.setText("Validating and importing a new workspace copy…");
+        importWorkspace(source.toPath()).whenComplete((workspace, failure) -> Platform.runLater(() -> {
+            if (closed) return;
+            if (failure != null) {
+                Throwable reason = failure; while (reason instanceof CompletionException && reason.getCause() != null) reason = reason.getCause();
+                status.setText(reason instanceof java.io.IOException ? reason.getMessage() : "Import failed. Existing data was unchanged; no partial workspace was added."); return;
+            }
+            refreshSelecting(workspace, () -> status.setText("Imported a new workspace copy. Existing data was kept. Review {{REDACTED}} inputs before sending; no requests were executed."));
+        }));
+    }
     private void runSelectedCollection() {
         if (collectionRunner == null) { status.setText("HTTP engine is unavailable."); return; }
         LibraryItem item = selected();
@@ -352,6 +392,12 @@ public final class LibraryWindowController implements AutoCloseable {
         MainWindowController controller = new MainWindowController(engine); controller.requestEditorModel().load(draft);
         Tab tab = new Tab(); tab.setContent(controller.createRequestContent());
         Entry entry = new Entry(id, workspace, controller, tab, title, saved); tab.setUserData(entry);
+        controller.setHistory(history, () -> {
+            LibraryItem ancestor = entry.saved == null ? null : byId(entry.saved.item().parentId());
+            while (ancestor != null && ancestor.kind() == LibraryItem.Kind.FOLDER) ancestor = byId(ancestor.parentId());
+            return new HistoryService.Context(entry.workspaceId, ancestor != null && ancestor.kind() == LibraryItem.Kind.COLLECTION ? ancestor.id() : null,
+                    entry.saved == null ? null : entry.saved.item().id(), entry.title.get());
+        });
         controller.setRunVariables(() -> sessionFor(entry));
         controller.setVariableContext(() -> repository.loadVariables(entry.workspaceId).thenApply(values ->
                 new dev.apitestingplatform.application.http.VariableResolver.Context(values.variables(), values.selectedVariables())));
@@ -476,12 +522,15 @@ public final class LibraryWindowController implements AutoCloseable {
             if (prompt.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
         }
         closing = true; root.setDisable(true); autosave.pause();
-        repository.finishSession().whenComplete((ignored, failure) -> Platform.runLater(() -> {
+        entries.values().forEach(entry -> entry.editor.cancelForWindowClose());
+        if (runWindow != null) runWindow.close();
+        CompletionStage<Void> stopped = collectionRunner == null ? CompletableFuture.completedFuture(null) : collectionRunner.cancelAndWait();
+        stopped.thenCompose(ignored -> repository.finishSession()).whenComplete((ignored, failure) -> Platform.runLater(() -> {
             if (failure != null) { closing = false; root.setDisable(false); autosave.resume(); retryDrafts(); error(failure); }
             else { close(); closeWindow.run(); }
         }));
     }
     @Override public void close() {
-        if (closed) return; closed = true; if (runWindow != null) runWindow.close(); if (collectionRunner != null) collectionRunner.close(); collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
+        if (closed) return; closed = true; if (historyWindow != null) historyWindow.close(); transferFiles.close(); if (runWindow != null) runWindow.close(); if (collectionRunner != null) collectionRunner.close(); collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
     }
 }

@@ -1,6 +1,7 @@
 package dev.apitestingplatform.application.run;
 
 import dev.apitestingplatform.application.http.*;
+import dev.apitestingplatform.application.storage.*;
 import dev.apitestingplatform.domain.http.*;
 import dev.apitestingplatform.domain.run.*;
 import dev.apitestingplatform.domain.storage.SavedRequest;
@@ -18,11 +19,22 @@ public final class CollectionRunner implements AutoCloseable {
         boolean cancel();
     }
     private final HttpExecutionEngine engine;
+    private final HistoryService history;
     private final ExecutorService worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(1),
             Thread.ofPlatform().daemon().name("collection-run-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private Job current;
     private boolean closed;
-    public CollectionRunner(HttpExecutionEngine engine) { this.engine = Objects.requireNonNull(engine); }
+    public CollectionRunner(HttpExecutionEngine engine) { this(engine, null); }
+    public CollectionRunner(HttpExecutionEngine engine, HistoryService history) { this.engine = Objects.requireNonNull(engine); this.history = history; }
+    public synchronized CompletionStage<Void> cancelAndWait() {
+        if (current == null) return CompletableFuture.completedFuture(null);
+        Job stopping = current; stopping.cancel();
+        return stopping.result().thenApply(report -> (Void) null).toCompletableFuture().orTimeout(30, TimeUnit.SECONDS);
+    }
+    public CompletionStage<Void> stopped() {
+        return CompletableFuture.runAsync(() -> { try { if (!worker.awaitTermination(30, TimeUnit.SECONDS)) throw new CompletionException(new IllegalStateException("Runner is still stopping.")); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new CompletionException(interrupted); } });
+    }
 
     public synchronized Execution start(CollectionSnapshot snapshot, RunOptions options, Consumer<Progress> progress, Consumer<RunEntry> completed) {
         Objects.requireNonNull(snapshot); Objects.requireNonNull(options); Objects.requireNonNull(progress); Objects.requireNonNull(completed);
@@ -43,6 +55,9 @@ public final class CollectionRunner implements AutoCloseable {
         private final Consumer<RunEntry> completed;
         private final CompletableFuture<RunReport> result = new CompletableFuture<>();
         private final List<RunEntry> entries = new ArrayList<>();
+        private final UUID historyId = UUID.randomUUID();
+        private long historyRevision, lastCheckpoint;
+        private String historyWarning = "";
         private boolean cancelled, done;
         private RequestExecution active;
         private Thread thread;
@@ -67,6 +82,7 @@ public final class CollectionRunner implements AutoCloseable {
             RunVariables variables = new RunVariables(); int position = 0; boolean stepStarted = false;
             synchronized (this) { thread = Thread.currentThread(); }
             try {
+                journal(started, HistoryRecord.State.RUNNING);
                 for (; position < total; position++) {
                     stepStarted = false; checkCancelled();
                     if (position > 0 && options.delayMillis() > 0) { progress(iteration(position), "Waiting between requests"); Thread.sleep(options.delayMillis()); checkCancelled(); }
@@ -74,6 +90,7 @@ public final class CollectionRunner implements AutoCloseable {
                     stepStarted = true; progress(iteration(position), "Preparing saved request " + (position + 1));
                     RunEntry entry = execute(position, variables);
                     checkCancelled(); entries.add(entry); emit(completed, entry); progress(iteration(position), "Request finished");
+                    if (entries.size() == 1 || System.nanoTime() - lastCheckpoint >= TimeUnit.SECONDS.toNanos(1)) journal(started, HistoryRecord.State.RUNNING);
                 }
                 if (entries.stream().anyMatch(RunEntry::hasProblems)) status = RunReport.Status.COMPLETED_WITH_FAILURES;
             } catch (InterruptedException cancellation) {
@@ -90,12 +107,21 @@ public final class CollectionRunner implements AutoCloseable {
                 String reason = status == RunReport.Status.CANCELLED ? "Not started: collection run was cancelled." : "Not started: collection run stopped.";
                 while (entries.size() < total) entries.add(unstarted(entries.size(), RunEntry.Outcome.NOT_RUN, reason));
                 synchronized (this) { if (cancelled) status = RunReport.Status.CANCELLED; done = true; thread = null; }
+                Thread.interrupted(); // Cancellation belongs to this job, not to its final history write.
+                try { journal(started, HistoryRecord.State.valueOf(status.name())); } catch (InterruptedException interrupted) { Thread.interrupted(); historyWarning = "History save is pending. Open History and retry pending saves."; }
                 synchronized (CollectionRunner.this) { if (current == this) current = null; }
-                Thread.interrupted(); // Cancellation belongs to this job, not to the next task on the worker.
-                result.complete(new RunReport(UUID.randomUUID(), snapshot.collectionId(), started, Instant.now(), status, entries));
+                result.complete(new RunReport(historyId, snapshot.collectionId(), started, Instant.now(), status, entries, historyWarning));
             }
         }
 
+        private void journal(Instant started, HistoryRecord.State state) throws InterruptedException {
+            if (history == null) return;
+            var record = HistorySanitizer.create(historyId, HistoryRecord.Kind.COLLECTION, snapshot.workspaceId(), snapshot.collectionId(), snapshot.name(), started.toEpochMilli(),
+                    state == HistoryRecord.State.RUNNING ? 0 : Math.max(started.toEpochMilli(), System.currentTimeMillis()), state, total, ++historyRevision, entries);
+            try { history.save(record).toCompletableFuture().get(10, TimeUnit.SECONDS); historyWarning = ""; }
+            catch (ExecutionException | TimeoutException failure) { historyWarning = "History save failed or is pending. Open History and retry pending saves."; }
+            lastCheckpoint = System.nanoTime();
+        }
         private RunEntry execute(int position, RunVariables variables) throws InterruptedException {
             SavedRequest saved = request(position); var draft = saved.draft(); var run = variables.snapshot();
             SecretRedactor redactor = new SecretRedactor(java.util.stream.Stream.of(snapshot.workspaceVariables(), snapshot.environmentVariables(), run.values(), draft.variables())

@@ -28,5 +28,13 @@ public interface LibraryRepository extends AutoCloseable {
     CompletionStage<Environment> saveEnvironment(Environment environment);
     CompletionStage<Void> deleteEnvironment(UUID environmentId, long expectedVersion);
     CompletionStage<Void> selectEnvironment(UUID workspaceId, UUID environmentId);
+    CompletionStage<WorkspaceTransfer> exportWorkspace(UUID workspaceId);
+    CompletionStage<UUID> importWorkspace(WorkspaceTransfer workspace);
+    CompletionStage<Void> saveHistory(dev.apitestingplatform.domain.run.HistoryRecord record);
+    CompletionStage<List<dev.apitestingplatform.domain.run.HistorySummary>> listHistory(int limit, int offset);
+    CompletionStage<dev.apitestingplatform.domain.run.HistoryRecord> loadHistory(UUID id);
+    CompletionStage<dev.apitestingplatform.domain.run.HistorySettings> historySettings();
+    CompletionStage<Void> saveHistorySettings(dev.apitestingplatform.domain.run.HistorySettings settings);
+    CompletionStage<Void> clearHistory();
     @Override void close();
 }

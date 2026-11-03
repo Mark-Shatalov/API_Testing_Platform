@@ -192,7 +192,7 @@ class SqliteLibraryRepositoryTest {
         await(open().ready());
     }
 
-    private static PayloadProtector encryptedTestProtector() {
+    static PayloadProtector encryptedTestProtector() {
         try {
             var key = KeyGenerator.getInstance("AES").generateKey();
             return new PayloadProtector() {

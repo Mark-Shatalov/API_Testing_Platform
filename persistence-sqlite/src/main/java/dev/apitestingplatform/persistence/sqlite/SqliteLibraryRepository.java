@@ -39,6 +39,7 @@ public final class SqliteLibraryRepository implements LibraryRepository {
                     statement.execute("PRAGMA journal_mode=WAL"); statement.execute("PRAGMA synchronous=FULL");
                 }
                 Migrations.apply(db, this.file, migrations == null ? Migrations.defaults() : List.copyOf(migrations));
+                if (migrations == null) new SqliteHistory(db, codec).recover();
                 ready.complete(null);
             } catch (Exception | LinkageError failure) {
                 release(); ready.completeExceptionally(failure instanceof StorageException ? failure
@@ -342,6 +343,14 @@ public final class SqliteLibraryRepository implements LibraryRepository {
         execute("INSERT INTO workspace_variable_settings(workspace_id,version,variables_json,selected_environment_id) VALUES(?,0,?,?) ON CONFLICT(workspace_id) DO UPDATE SET selected_environment_id=excluded.selected_environment_id",
                 workspaceId.toString(), empty, environmentId == null ? null : environmentId.toString()); return null;
     }); }
+    @Override public CompletionStage<WorkspaceTransfer> exportWorkspace(UUID workspaceId) { return submit(() -> transaction(() -> new SqliteTransfers(db, codec).snapshot(workspaceId))); }
+    @Override public CompletionStage<UUID> importWorkspace(WorkspaceTransfer workspace) { return submit(() -> new SqliteTransfers(db, codec).importCopy(workspace)); }
+    @Override public CompletionStage<Void> saveHistory(dev.apitestingplatform.domain.run.HistoryRecord record) { return submit(() -> transaction(() -> { new SqliteHistory(db, codec).save(record); return null; })); }
+    @Override public CompletionStage<List<dev.apitestingplatform.domain.run.HistorySummary>> listHistory(int limit, int offset) { return submit(() -> new SqliteHistory(db, codec).list(limit, offset)); }
+    @Override public CompletionStage<dev.apitestingplatform.domain.run.HistoryRecord> loadHistory(UUID id) { return submit(() -> new SqliteHistory(db, codec).load(id)); }
+    @Override public CompletionStage<dev.apitestingplatform.domain.run.HistorySettings> historySettings() { return submit(() -> new SqliteHistory(db, codec).settings()); }
+    @Override public CompletionStage<Void> saveHistorySettings(dev.apitestingplatform.domain.run.HistorySettings settings) { return submit(() -> transaction(() -> { new SqliteHistory(db, codec).settings(settings); return null; })); }
+    @Override public CompletionStage<Void> clearHistory() { return submit(() -> { new SqliteHistory(db, codec).clear(); return null; }); }
     private void release() {
         try { if (db != null) db.close(); } catch (SQLException ignored) { }
         try { if (lock != null) lock.release(); } catch (java.io.IOException ignored) { }

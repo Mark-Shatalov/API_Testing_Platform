@@ -9,7 +9,7 @@ import java.util.*;
 final class Migrations {
     static List<Migration> defaults() throws java.io.IOException {
         List<Migration> migrations = new ArrayList<>();
-        for (String name : List.of("V001__local_storage.sql", "V002__environments.sql")) {
+        for (String name : List.of("V001__local_storage.sql", "V002__environments.sql", "V003__execution_history.sql")) {
             try (var source = Migrations.class.getResourceAsStream(name)) {
                 if (source == null) throw new java.io.IOException("Missing schema resource");
                 migrations.add(new Migration(migrations.size() + 1, new String(source.readAllBytes(), StandardCharsets.UTF_8), false));

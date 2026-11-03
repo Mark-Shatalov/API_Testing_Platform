@@ -1,6 +1,9 @@
 package dev.apitestingplatform.ui.controller;
 
 import dev.apitestingplatform.ui.MainView;
+import dev.apitestingplatform.application.storage.*;
+import dev.apitestingplatform.domain.run.RunEntry;
+import dev.apitestingplatform.domain.http.ExtractionResult;
 import dev.apitestingplatform.ui.components.RequestToolbar;
 import dev.apitestingplatform.ui.components.RequestEditor;
 import dev.apitestingplatform.ui.components.ResponsePanel;
@@ -56,8 +59,17 @@ public final class MainWindowController implements AutoCloseable {
     private java.util.List<AssertionDefinition> runningAssertions = java.util.List.of();
     private SecretRedactor runningRedactor = SecretRedactor.empty();
     private record ResponseWork(java.util.List<AssertionDefinition> assertions, java.util.List<ExtractionDefinition> extractions,
-            RunVariables session, RunVariables.Snapshot snapshot, SecretRedactor redactor) { }
+            RunVariables session, RunVariables.Snapshot snapshot, SecretRedactor redactor, RequestHistory history) { }
     private ResponseWork runningWork;
+    private HistoryService historyService;
+    private java.util.function.Supplier<HistoryService.Context> historyContext;
+    private RequestHistory currentHistory;
+    private final Label historyNotice = new Label();
+    public void setHistory(HistoryService service, java.util.function.Supplier<HistoryService.Context> context) { historyService = service; historyContext = context; }
+    public void cancelForWindowClose() {
+        if (currentHistory != null) saveHistory(currentHistory, RunEntry.Outcome.CANCELLED, 0, 0, 0, java.util.List.of(), java.util.List.of(), "Request was cancelled.", SecretRedactor.empty());
+        onCancelRequested();
+    }
     private final RunVariables privateSession = new RunVariables();
     private java.util.function.Supplier<RunVariables> runVariables = () -> privateSession;
     public void setRunVariables(java.util.function.Supplier<RunVariables> provider) { runVariables = Objects.requireNonNull(provider); }
@@ -149,7 +161,8 @@ public final class MainWindowController implements AutoCloseable {
         Button clearSession = new Button("Clear temporary variables"); clearSession.setId("request-clear-temporary");
         clearSession.setOnAction(event -> clearTemporaryVariables());
         HBox targetBar = new HBox(10, preview, clearSession, target); targetBar.setAlignment(Pos.CENTER_LEFT); targetBar.getStyleClass().add("target-preview");
-        VBox requestEditor = new VBox(toolbar, targetBar, RequestEditor.error(draft.urlError, "request-url-error"),
+        historyNotice.setId("request-history-status"); historyNotice.setWrapText(true); historyNotice.visibleProperty().bind(historyNotice.textProperty().isNotEmpty()); historyNotice.managedProperty().bind(historyNotice.visibleProperty());
+        VBox requestEditor = new VBox(toolbar, targetBar, historyNotice, RequestEditor.error(draft.urlError, "request-url-error"),
                 RequestEditor.error(draft.summary, "request-validation-summary"), editor);
         requestEditor.setMinHeight(260);
         requestEditor.getStyleClass().add("request-editor");
@@ -186,8 +199,11 @@ public final class MainWindowController implements AutoCloseable {
     private void prepareRequest(boolean send) {
         if (send && engine == null) { viewModel.showMessage("HTTP engine is unavailable."); return; }
         if (viewModel.operationInProgressProperty().get() || closed) return;
+        if (send && historyService != null) {
+            currentHistory = new RequestHistory(historyService, historyContext.get()); currentHistory.begin(); historyNotice.setText("History recording started.");
+        }
         var snapshot = draft.snapshot();
-        if (snapshot.isEmpty()) { viewModel.showMessage(draft.summary.get()); return; }
+        if (snapshot.isEmpty()) { saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Request validation failed."); viewModel.showMessage(draft.summary.get()); return; }
         RequestConfiguration configuration = snapshot.orElseThrow();
         var localVariables = draft.variables.stream().map(RequestEditorViewModel.VariableRow::snapshot).toList();
         var authentication = draft.authentication();
@@ -195,11 +211,11 @@ public final class MainWindowController implements AutoCloseable {
         final RunVariables session;
         final RunVariables.Snapshot runSnapshot;
         try { session = runVariables.get(); runSnapshot = session.snapshot(); }
-        catch (RuntimeException unavailable) { draft.variableError.set("Temporary session is unavailable. Clear temporary variables in the toolbar and try again."); return; }
+        catch (RuntimeException unavailable) { saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Temporary session is unavailable."); draft.variableError.set("Temporary session is unavailable. Clear temporary variables in the toolbar and try again."); return; }
         var assertions = draft.assertions.stream().map(RequestEditorViewModel.AssertionRow::snapshot).toList();
         CompletionStage<VariableResolver.Context> context;
         try { context = variableContext.get(); }
-        catch (RuntimeException failure) { draft.variableError.set("Workspace variables are unavailable. Refresh and try again."); return; }
+        catch (RuntimeException failure) { saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Workspace variables are unavailable."); draft.variableError.set("Workspace variables are unavailable. Refresh and try again."); return; }
         long revision = draft.revision();
         long ticket = ++submission;
         viewModel.beginOperation();
@@ -232,6 +248,7 @@ public final class MainWindowController implements AutoCloseable {
                     if (!issues.isEmpty()) {
                         target.setText("Target unavailable — fix the marked fields.");
                         if (draft.revision() == revision) draft.showIssues(issues);
+                        if (send) saveHistory(currentHistory, RunEntry.Outcome.INVALID_REQUEST, 0, 0, 0, historyNotRun(assertions, prepared == null ? SecretRedactor.empty() : prepared.redactor()), ExtractionEngine.notRun(extractions, SecretRedactor.empty(), "Request was not sent.").results(), "Request validation failed.", prepared == null ? SecretRedactor.empty() : prepared.redactor());
                         viewModel.finishOperation("Request not sent: validation failed."
                                 + (draft.revision() != revision ? " The editor has newer unsent edits." : " See the marked fields."));
                         if (send) {
@@ -242,11 +259,12 @@ public final class MainWindowController implements AutoCloseable {
                         return;
                     }
                     target.setText("Target: " + prepared.preview());
-                    if (send) execute(prepared.request(), revision, new ResponseWork(assertions, extractions, session, runSnapshot, prepared.redactor()));
+                    if (send) execute(prepared.request(), revision, new ResponseWork(assertions, extractions, session, runSnapshot, prepared.redactor(), currentHistory));
                     else viewModel.finishOperation("Target preview ready. Secret variables are masked; no request was sent.");
                 });
             });
         } catch (RejectedExecutionException unavailable) {
+            if (send) saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Request worker is busy.");
             viewModel.finishOperation("Request validation is busy. Try again.");
             responsePanel.showValidationFailure("Request not sent — validation is busy.");
         }
@@ -278,34 +296,35 @@ public final class MainWindowController implements AutoCloseable {
         responsePanel.showResponse(result);
         var assertions = work.assertions(); var redactor = work.redactor();
         String completion = result.error().map(error -> error.type() == NetworkError.Type.CANCELLED ? "Request cancelled" : "Request failed").orElse("Request completed");
-        if (assertions.isEmpty() && work.extractions().isEmpty()) { runningWork = null; viewModel.finishOperation(completion); return; }
+        if (assertions.isEmpty() && work.extractions().isEmpty()) { saveResponseHistory(work, result, java.util.List.of(), java.util.List.of()); runningWork = null; viewModel.finishOperation(completion); return; }
         long ticket = submission; runningAssertions = assertions; runningRedactor = redactor;
         responsePanel.showTestsPending(); responsePanel.showExtractionsPending(); viewModel.showMessage("Checking and extracting response data…");
         try {
             pendingAssertions = validation.submit(() -> {
                 ExtractionEngine.Evaluation extraction;
-                java.util.List<ResponseTestResult> checks;
+                java.util.List<AssertionResult> checks;
                 try {
                     extraction = ExtractionEngine.evaluate(result, work.extractions(), redactor);
                     SecretRedactor combined = redactor.withSecrets(extraction.values().stream().map(dev.apitestingplatform.domain.variables.Variable::value).toList());
-                    checks = AssertionEngine.evaluate(result, assertions, combined).stream().map(ResponseTestResult::from).toList();
+                    checks = AssertionEngine.evaluate(result, assertions, combined);
                 } catch (RuntimeException failure) {
                     extraction = ExtractionEngine.notRun(work.extractions(), redactor, "Response processing could not finish safely.");
-                    checks = notRun(assertions, redactor, "The checks could not be evaluated safely.");
+                    checks = historyNotRun(assertions, redactor);
                 }
                 var evaluated = checks; var extracted = extraction;
                 Platform.runLater(() -> {
                     if (closed || ticket != submission) return;
                     pendingAssertions = null; runningWork = null; runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty();
-                    responsePanel.showTests(evaluated);
-                    responsePanel.showExtractions(work.extractions().isEmpty() ? extracted.results() : work.session().publish(work.snapshot(), extracted));
+                    responsePanel.showTests(evaluated.stream().map(ResponseTestResult::from).toList());
+                    var published = work.extractions().isEmpty() ? extracted.results() : work.session().publish(work.snapshot(), extracted);
+                    responsePanel.showExtractions(published); saveResponseHistory(work, result, evaluated, published);
                     viewModel.finishOperation(completion + " — response processing finished");
                 });
             });
         } catch (RejectedExecutionException busy) {
             runningWork = null; runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty();
             responsePanel.showTests(notRun(assertions, redactor, "Response worker is busy. Send again to retry."));
-            abandonExtractions(work, "Response worker is busy. Send again to retry."); viewModel.finishOperation(completion);
+            abandonExtractions(work, "Response worker is busy. Send again to retry."); saveResponseHistory(work, result, historyNotRun(assertions, redactor), ExtractionEngine.notRun(work.extractions(), redactor, "Worker is busy.").results()); viewModel.finishOperation(completion);
         }
     }
     private void abandonExtractions(ResponseWork work, String reason) {
@@ -321,24 +340,41 @@ public final class MainWindowController implements AutoCloseable {
         else if (pendingAssertions != null) {
             submission++; pendingAssertions.cancel(true); pendingAssertions = null; validation.purge();
             responsePanel.showTests(notRun(runningAssertions, runningRedactor, "Check evaluation was cancelled."));
-            abandonExtractions(runningWork, "Response processing was cancelled."); runningWork = null;
+            abandonExtractions(runningWork, "Response processing was cancelled."); saveHistorySimple(RunEntry.Outcome.CANCELLED, "Response processing was cancelled."); runningWork = null;
             runningAssertions = java.util.List.of(); runningRedactor = SecretRedactor.empty(); viewModel.finishOperation("Response processing cancelled; response is still available.");
         }
         else if (pendingValidation != null) {
             submission++;
             pendingValidation.cancel(true); pendingValidation = null; validation.purge();
+            saveHistorySimple(RunEntry.Outcome.CANCELLED, "Request was cancelled before sending.");
             viewModel.finishOperation("Request cancelled");
             responsePanel.showResponse(localError(NetworkError.Type.CANCELLED, "The request was cancelled."));
         }
     }
 
+    private static java.util.List<AssertionResult> historyNotRun(java.util.List<AssertionDefinition> rules, SecretRedactor redactor) {
+        return rules.stream().map(rule -> new AssertionResult(rule.id(), redactor.text(rule.name()), rule.enabled() ? AssertionResult.Outcome.NOT_RUN : AssertionResult.Outcome.DISABLED, "", "", "Check could not run.")).toList();
+    }
+    private void saveResponseHistory(ResponseWork work, ExecutionResult response, java.util.List<AssertionResult> checks, java.util.List<ExtractionResult> extractions) {
+        var outcome = response.error().isPresent() ? response.error().get().type() == NetworkError.Type.CANCELLED ? RunEntry.Outcome.CANCELLED : RunEntry.Outcome.NETWORK_ERROR
+                : response.statusCode() >= 400 ? RunEntry.Outcome.HTTP_ERROR : RunEntry.Outcome.SUCCESS;
+        saveHistory(work.history(), outcome, response.statusCode(), response.durationMillis(), response.sizeBytes(), checks, extractions,
+                response.error().map(error -> "Network error: " + error.type().name()).orElse("HTTP response received."), work.redactor());
+    }
+    private void saveHistorySimple(RunEntry.Outcome outcome, String reason) { saveHistory(currentHistory, outcome, 0, 0, 0, java.util.List.of(), java.util.List.of(), reason, SecretRedactor.empty()); }
+    private void saveHistory(RequestHistory capture, RunEntry.Outcome outcome, int status, long time, long bytes, java.util.List<AssertionResult> checks, java.util.List<ExtractionResult> extractions, String reason, SecretRedactor redactor) {
+        if (capture == null) return; if (currentHistory == capture) currentHistory = null; long version = submission;
+        capture.finish(outcome, status, time, bytes, checks, extractions, reason, redactor).whenComplete((ignored, failure) -> Platform.runLater(() -> {
+            if (!closed && submission == version) historyNotice.setText(failure == null ? "History saved (response data and compared values omitted)." : "History save failed. Open History and use Retry pending saves; the response remains available.");
+        }));
+    }
     private static ExecutionResult localError(NetworkError.Type type, String message) {
         return new ExecutionResult(0, java.util.Map.of(), new byte[0], 0, 0,
                 java.util.Optional.of(new NetworkError(type, message)), java.time.Instant.now(), java.util.Optional.empty());
     }
 
     @Override public void close() {
-        closed = true;
+        if (closed) return; cancelForWindowClose(); closed = true;
         submission++;
         validation.shutdownNow();
         abandonExtractions(runningWork, "Request tab was closed."); runningWork = null; privateSession.clear();

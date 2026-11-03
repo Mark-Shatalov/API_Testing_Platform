@@ -12,6 +12,7 @@
     <name>API Testing Platform - UI</name>
 
     <dependencies>
+        <dependency><groupId>dev.apitestingplatform</groupId><artifactId>import-export</artifactId></dependency>
         <dependency>
             <groupId>dev.apitestingplatform</groupId>
             <artifactId>application</artifactId>

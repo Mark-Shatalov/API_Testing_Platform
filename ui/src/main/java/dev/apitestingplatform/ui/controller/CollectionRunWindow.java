@@ -41,7 +41,7 @@ public final class CollectionRunWindow implements AutoCloseable {
         iterations.setAccessibleText("Iteration count"); delay.setAccessibleText("Delay between requests in milliseconds");
         start.setId("collection-run-start"); cancel.setId("collection-run-cancel"); cancel.setDisable(true);
         start.setOnAction(event -> start()); cancel.setOnAction(event -> cancel());
-        Label hint = new Label("Runs saved requests in tree order, including folders. Save edits before Start. Each iteration has fresh temporary variables; failures are recorded and later requests continue. Closing this window cancels the run. Results stay here until the window is closed."); hint.setWrapText(true);
+        Label hint = new Label("Runs saved requests in tree order, including folders. Save edits before Start. Each iteration has fresh temporary variables; failures are recorded and later requests continue. Closing this window cancels the run. Runs are saved in History; compared values and response bodies are omitted."); hint.setWrapText(true);
         FlowPane controls = new FlowPane(10, 8, new Label("Iterations"), iterations, new Label("Delay (ms)"), delay, start, cancel);
         progress.setMaxWidth(Double.MAX_VALUE); progress.setId("collection-run-progress");
         status.setId("collection-run-status"); status.setWrapText(true);
@@ -111,7 +111,7 @@ public final class CollectionRunWindow implements AutoCloseable {
                     long processed = report.entries().stream().filter(row -> row.outcome() != RunEntry.Outcome.NOT_RUN).count();
                     progress.setProgress((double) processed / report.entries().size());
                     status.setText(report.status().name().replace('_', ' ') + " · " + processed + "/" + report.entries().size() + " processed · " + report.requestFailures() + " request failures · "
-                            + report.failedChecks() + " failed checks · " + report.extractionProblems() + " extraction problems");
+                            + report.failedChecks() + " failed checks · " + report.extractionProblems() + " extraction problems" + (report.historyWarning().isEmpty() ? " · history saved" : " · " + report.historyWarning()));
                     if (results.getSelectionModel().getSelectedItem() == null) results.getSelectionModel().selectFirst();
                 }));
             } catch (IllegalArgumentException | IllegalStateException unavailable) { busy(false); progress.setProgress(0); status.setText(unavailable.getMessage()); }

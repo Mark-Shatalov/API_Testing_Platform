@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Steps 4–14 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative response assertions and response extraction into temporary variables and sequential collection execution. Persistent execution history and portable import/export remain later increments (steps 15–16).
+Steps 4–16 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports and portable workspace import/export. Operational settings, diagnostics and release packaging remain later increments.
 
 ## Module structure
 
@@ -67,7 +67,7 @@ Complete request and recovery payloads are versioned JSON envelopes in TEXT colu
 
 `schema_version` records ordered SHA-256-checksummed migrations. Changed checksums or unknown schema versions are rejected without replacing data. Before an incompatible migration, `VACUUM INTO` creates a consistent backup under `migration-backups` next to the database; migration SQL and version registration are transactional and roll back on failure. Do not manually copy a live database without its WAL; close the app before file-level backup. Manual backup/restore UI belongs to a later phase.
 
-Environments and variables are implemented in step 10. Steps 12–13 save ordered assertion and extraction definitions inside the encrypted request payload alongside editor settings. The schema also prepares normalized assertion/run/result tables; run history persistence remains future work. See [Phase 2 implementation and verification](docs/phase-2-implementation.md), [Step 10 implementation](docs/step-10-environments.md) [Step 12 assertions](docs/step-12-assertions.md) and [Step 13 extraction](docs/step-13-extraction.md).
+Environments and variables are implemented in step 10. Steps 12–13 save ordered assertion and extraction definitions inside the encrypted request payload alongside editor settings. Step 15 adds encrypted, bounded execution history through an additive V003 migration; the older normalized run/result tables remain reserved. See [Phase 2 implementation and verification](docs/phase-2-implementation.md), [Step 10 implementation](docs/step-10-environments.md), [Step 12 assertions](docs/step-12-assertions.md) and [Step 13 extraction](docs/step-13-extraction.md).
 
 ## Environments and variables
 
@@ -91,7 +91,7 @@ Preview and Send resolve authentication on a background worker without changing 
 
 On a cross-origin redirect, generated custom API key headers and headers containing secret variables are stripped alongside Authorization/Proxy-Authorization/Cookie. Query parameters identified as credentials are removed from a cross-origin redirect target, and remain stripped on subsequent redirects. Same-origin redirects retain header credentials and follow the server's query string. TLS certificate and hostname verification remain enabled; no bypass setting is provided.
 
-The shared `SecretRedactor` masks Authorization, Proxy-Authorization, Cookie, Set-Cookie, custom authentication fields and known secret values at text/header/URL boundaries. `RedactedRequestSummary` provides a non-portable diagnostic JSON codec that omits bodies and cookie/query values and redacts credential headers/URLs. Its tests verify that ordinary summaries contain no credential plaintext. History, logging/diagnostic archives and portable import/export user flows remain later steps; those flows must use this boundary. No imported scripts are executed. The interactive response viewer and explicit Save Response still show/save actual server data, which can include echoed credentials.
+The shared `SecretRedactor` masks Authorization, Proxy-Authorization, Cookie, Set-Cookie, custom authentication fields and known secret values at text/header/URL boundaries. `RedactedRequestSummary` provides a non-portable diagnostic JSON codec that omits bodies and cookie/query values and redacts credential headers/URLs. Its tests verify that ordinary summaries contain no credential plaintext. History and portable export now apply additional omission boundaries; logging/diagnostic archives remain later work. No imported scripts are executed. The interactive response viewer and explicit Save Response still show/save actual server data, which can include echoed credentials.
 
 See [Step 11 implementation and verification](docs/step-11-authentication.md).
 
@@ -107,7 +107,7 @@ JSONPath uses Jayway 3.0.0 with a bounded Jackson provider. Supported paths sele
 
 Malformed/empty/oversized/truncated JSON gives NOT RUN for JSON checks while independent status/header checks can still run. For truncated downloads, a size/time already above the maximum conclusively fails; a captured measurement below the maximum is NOT RUN because the complete response is unknown. Cancel during check evaluation preserves the received response and marks unfinished checks NOT RUN. Known secrets and credential headers are masked in assertion results; raw response debugging remains unchanged. JSONPath's own debug logging is disabled to keep user paths out of diagnostics.
 
-Check results are available for the current response; persistent execution history belongs to step 15. Check definitions currently live in the encrypted request JSON rather than a second normalized copy. See [Step 12 implementation and verification](docs/step-12-assertions.md).
+Complete masked check values are available in the current response; History persists check outcomes/counts with compared values omitted. Check definitions currently live in the encrypted request JSON rather than a second normalized copy. See [Step 12 implementation and verification](docs/step-12-assertions.md).
 
 ## Response extraction
 
@@ -135,9 +135,33 @@ The results table updates as requests complete and shows iteration, request outc
 
 **Cancel run** cancels active HTTP or interrupts the delay and prevents subsequent requests from starting. Completed rows remain; the interrupted step is CANCELLED and later steps are NOT RUN. Closing the runner or application also cancels the run. Cancellation before snapshot loading finishes sends no requests. A finished/cancelled run can be started again from a fresh snapshot.
 
-Limits: one active collection run, 1–1,000 iterations, 0–60,000 ms between request steps, at most 1,000 total executions and a 32 MiB protected saved-request snapshot budget. There is no delay before the first request or after the last. Progress/results stay in the runner window until replaced by Start or discarded on close; persistent history and report export belong to step 15. Bodies, headers and runtime variable values are not retained in runner result rows.
+Limits: one active collection run, 1–1,000 iterations, 0–60,000 ms between request steps, at most 1,000 total executions and a 32 MiB protected saved-request snapshot budget. There is no delay before the first request or after the last. Live results stay in the runner window, while History preserves sanitized reports across closing/restart. Bodies, headers and runtime variable values are not retained in runner result rows.
 
 See [Step 14 implementation and verification](docs/step-14-collection-runner.md).
+
+## Execution history and reports
+
+Use **History…** in the top toolbar after Send or Run collection. Request attempts include validation/network failures and cancellation; collection records include per-step outcomes and partial/cancelled progress. Select a record to reopen its report, then select a request row to inspect check/extraction outcomes. **Refresh** reloads the latest records, including completed runs whose runner window is closed.
+
+History keeps request identity/name, HTTP status, duration, captured size, classified network errors and assertion/extraction outcomes. Headers, bodies, URLs, runtime variables and compared expected/actual values are omitted. Rule details have a global 2 MiB admission budget per report; counts remain complete when details are omitted. Payloads use current-user DPAPI; history IDs/times/kinds/status/counts remain ordinary SQLite metadata. The normal response viewer and Save Response continue to show/save actual server data.
+
+Defaults retain the most recent 100 finished records for 30 days. In the History window, change the record/day limits and **Save retention**; cleanup applies immediately and on startup/save. Limits are 1–1,000 records and 1–365 days, with pages of 100 records. Active entries are preserved. **Clear finished history…** asks before removing finished records and keeps saved requests/environments. History survives deleting source requests/collections.
+
+Runs save an initial entry, the first step and checkpoints at most once per second, followed by a final report. Startup marks unfinished entries INTERRUPTED; such reports can contain only their last committed checkpoint. Normal window closing cancels active work and waits for the runner's final history save before closing storage. History failure keeps the response/run result available and displays a notice. **Retry pending saves** retries up to 16 buffered records in this app session; the buffer itself does not survive a process exit.
+
+**Export report…** writes a readable standalone HTML report or versioned JSON report from the selected record. Both formats omit compared values and payloads; HTML escapes user markup and has no scripts/external resources. Report export is capped at 8 MiB and replaces a destination atomically. See [Step 15 history](docs/step-15-history.md).
+
+## Portable workspace import and export
+
+**Export workspace…** exports the selected saved workspace: collections, folders, request drafts, environments, workspace/request variables, authentication settings, assertions and extraction rules, in saved order. Save open edits first. This is API Testing Platform's own JSON format (`api-testing-platform-workspace`, version 1), independent of SQLite/DPAPI. It does not import Postman or OpenAPI files, file contents, history, recovery tabs or temporary run variables.
+
+Secret inclusion is off by default. Default export replaces secret/sensitive-name variables, credentials, literal header/query/form/cookie values, body drafts and sensitive expected values with omission markers, and removes upload paths/fragments. Full variable placeholders in structured inputs are retained, and known credential values are masked in other data fields, including URL paths. Names and non-secret configuration/variables remain. Keep confidential variables marked Secret; exported names are public metadata. Fill `{{REDACTED}}` inputs and review omitted check expectations before sending imported requests.
+
+The explicit **Include secret values and request payloads in plain text** checkbox exports full saved values, including inactive drafts and upload path references. Files are never embedded. This choice applies only to that export and is not remembered. An exported file with secrets is ordinary plaintext; imported saved payloads are encrypted again for the receiving Windows user.
+
+**Import workspace…** validates the entire file before changing the database, then creates a separate workspace named `… (imported)` with fresh hierarchy/environment IDs and remapped references. Existing data and unsaved tabs are kept; nothing is executed. Failed parsing, reference validation, encryption or SQL rolls back without a partial workspace. Unknown fields/versions are rejected with an explanation.
+
+Limits: 32 MiB file, 10,000 hierarchy items, 100 environments, existing per-draft/per-variable budgets, JSON nesting depth 100 and duplicate-key detection. Export snapshot admission also caps protected source payloads at 48 MiB; default secret masking caps 4,096 distinct known credential values / 2 MiB credential characters. Oversized workspaces must be split. File parsing/writing and all SQLite/encryption work stay off JavaFX. Failed/unsupported atomic replacement leaves the previous destination intact. See [Step 16 portable transfer](docs/step-16-portable-transfer.md).
 
 ## HTTP engine
 

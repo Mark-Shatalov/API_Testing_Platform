@@ -1,6 +1,7 @@
 module dev.apitestingplatform.ui {
     requires transitive javafx.controls;
     requires dev.apitestingplatform.application;
+    requires dev.apitestingplatform.importexport;
     requires com.fasterxml.jackson.core;
     requires org.fxmisc.richtext;
     requires org.fxmisc.flowless;
