@@ -23,6 +23,10 @@ public final class SqliteLibraryRepository implements LibraryRepository {
     private Connection db;
     private FileChannel lockFile;
     private FileLock lock;
+    private volatile String startupNotice = "";
+    private volatile dev.apitestingplatform.application.operations.EventLog events = dev.apitestingplatform.application.operations.EventLog.none();
+    public void setEventLog(dev.apitestingplatform.application.operations.EventLog log) { events = Objects.requireNonNull(log); }
+    @Override public String startupNotice() { return startupNotice; }
 
     public SqliteLibraryRepository(Path file, PayloadProtector protector) { this(file, protector, null); }
     SqliteLibraryRepository(Path file, PayloadProtector protector, List<Migration> migrations) {
@@ -33,6 +37,7 @@ public final class SqliteLibraryRepository implements LibraryRepository {
                 lockFile = FileChannel.open(this.file.resolveSibling(this.file.getFileName() + ".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 lock = lockFile.tryLock();
                 if (lock == null) throw new StorageException("The data directory is already in use by another application instance.");
+                if (migrations == null) startupNotice = new DatabaseBackups(this.file, codec).applyPending();
                 db = DriverManager.getConnection("jdbc:sqlite:" + this.file);
                 try (var statement = db.createStatement()) {
                     statement.execute("PRAGMA foreign_keys=ON"); statement.execute("PRAGMA busy_timeout=3000");
@@ -42,8 +47,10 @@ public final class SqliteLibraryRepository implements LibraryRepository {
                 if (migrations == null) new SqliteHistory(db, codec).recover();
                 ready.complete(null);
             } catch (Exception | LinkageError failure) {
-                release(); ready.completeExceptionally(failure instanceof StorageException ? failure
-                        : new StorageException("Local storage could not start. Data was not replaced; check access, disk space and schema compatibility."));
+                try { if (db != null) db.close(); } catch (SQLException ignored) { } db = null;
+                if (lock == null) { try { if (lockFile != null) lockFile.close(); } catch (java.io.IOException ignored) { } }
+                startupNotice = failure instanceof StorageException safe ? safe.getMessage() : "Local storage could not start. Open Settings to review storage access or restore a verified backup. Current files were kept.";
+                ready.completeExceptionally(failure instanceof StorageException ? failure : new StorageException(startupNotice));
             }
         });
     }
@@ -51,16 +58,18 @@ public final class SqliteLibraryRepository implements LibraryRepository {
     public Path databasePath() { return file; }
 
     @FunctionalInterface private interface Work<T> { T run() throws Exception; }
-    private <T> CompletionStage<T> submit(Work<T> action) {
+    private <T> CompletionStage<T> submit(Work<T> action) { return submit(action, true); }
+    private <T> CompletionStage<T> submit(Work<T> action, boolean needsReady) {
         var result = new CompletableFuture<T>();
         if (closed.get()) { result.completeExceptionally(new StorageException("Local storage is closed.")); return result; }
         try {
             worker.execute(() -> {
-                try { ready.join(); result.complete(action.run()); }
+                try { if (needsReady) ready.join(); else if (lock == null || !lock.isValid()) throw new StorageException(StorageException.Reason.BUSY, "The data directory is not owned by this instance. Close the other instance before backup/restore."); result.complete(action.run()); }
                 catch (Exception failure) {
                     Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
-                    result.completeExceptionally(cause instanceof StorageException ? cause
-                            : new StorageException("Local storage operation failed. Your editor changes are still available. Check disk space and permissions."));
+                    var safe = storageFailure(cause);
+                    events.record(dev.apitestingplatform.application.operations.EventLog.Level.WARN, dev.apitestingplatform.application.operations.EventLog.Component.STORAGE, dev.apitestingplatform.application.operations.EventLog.Code.STORAGE_FAILED, UUID.randomUUID());
+                    result.completeExceptionally(safe);
                 }
             });
         } catch (RejectedExecutionException busy) { result.completeExceptionally(new StorageException("Local storage is busy or closed. Try again.")); }
@@ -205,7 +214,7 @@ public final class SqliteLibraryRepository implements LibraryRepository {
         }
         execute("UPDATE drafts SET session_id=? WHERE tab_id=?", session.toString(), id.toString()); return draft;
     })); }
-    @Override public CompletionStage<Void> finishSession() { return submit(() -> {
+    @Override public CompletionStage<Void> finishSession() { if (ready.isCompletedExceptionally()) return CompletableFuture.completedFuture(null); return submit(() -> {
         execute("DELETE FROM drafts WHERE session_id=?", session.toString()); return null;
     }); }
     @Override public CompletionStage<dev.apitestingplatform.domain.run.CollectionSnapshot> snapshotCollection(UUID collectionId) {
@@ -351,6 +360,21 @@ public final class SqliteLibraryRepository implements LibraryRepository {
     @Override public CompletionStage<dev.apitestingplatform.domain.run.HistorySettings> historySettings() { return submit(() -> new SqliteHistory(db, codec).settings()); }
     @Override public CompletionStage<Void> saveHistorySettings(dev.apitestingplatform.domain.run.HistorySettings settings) { return submit(() -> transaction(() -> { new SqliteHistory(db, codec).settings(settings); return null; })); }
     @Override public CompletionStage<Void> clearHistory() { return submit(() -> { new SqliteHistory(db, codec).clear(); return null; }); }
+    @Override public CompletionStage<Path> backupDatabase(Path destination) { return submit(() -> new DatabaseBackups(file, codec).backup(db, destination)); }
+    @Override public CompletionStage<Void> stageDatabaseRestore(Path source) { return submit(() -> { new DatabaseBackups(file, codec).stage(source); return null; }, false); }
+    @Override public CompletionStage<Boolean> pendingDatabaseRestore() { return submit(() -> new DatabaseBackups(file, codec).pending(), false); }
+    @Override public CompletionStage<Void> cancelDatabaseRestore() { return submit(() -> { new DatabaseBackups(file, codec).cancel(); return null; }, false); }
+    static StorageException storageFailure(Throwable failure) {
+        if (failure instanceof StorageException safe) return safe;
+        if (failure instanceof SQLException sql) return switch (sql.getErrorCode() & 255) {
+            case 5, 6 -> new StorageException(StorageException.Reason.BUSY, "Local storage is locked. Wait for the other operation to finish and retry; unsaved edits remain available.");
+            case 13 -> new StorageException(StorageException.Reason.FULL, "Storage is full. Free disk space and retry; unsaved edits remain available.");
+            case 8, 10, 14 -> new StorageException(StorageException.Reason.ACCESS, "Local storage cannot write. Check directory access and disk space, then retry; unsaved edits remain available.");
+            case 11, 26 -> new StorageException(StorageException.Reason.CORRUPT, "Local storage could not be read. Open Settings to restore a verified backup; current files and unsaved edits were kept.");
+            default -> new StorageException("Local storage operation failed. Your editor changes are still available. Check disk space and permissions.");
+        };
+        return new StorageException("Protected storage could not be read or written. Your editor changes remain available; check access and retry.");
+    }
     private void release() {
         try { if (db != null) db.close(); } catch (SQLException ignored) { }
         try { if (lock != null) lock.release(); } catch (java.io.IOException ignored) { }

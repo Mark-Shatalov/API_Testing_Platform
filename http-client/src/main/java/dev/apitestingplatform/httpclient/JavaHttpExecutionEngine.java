@@ -46,7 +46,8 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
     public JavaHttpExecutionEngine(EngineLimits limits) { this(limits, null); }
 
     /** Custom trust context is optional; default JVM certificate and hostname validation stays enabled. */
-    public JavaHttpExecutionEngine(EngineLimits limits, SSLContext sslContext) {
+    public JavaHttpExecutionEngine(EngineLimits limits, SSLContext sslContext) { this(limits, sslContext, null); }
+    public JavaHttpExecutionEngine(EngineLimits limits, SSLContext sslContext, java.net.ProxySelector proxy) {
         this.limits = Objects.requireNonNull(limits, "limits");
         dispatch = pool(limits.workerThreads(), limits.maxConcurrentRequests(), "api-dispatch-",
                 new ThreadPoolExecutor.AbortPolicy());
@@ -57,6 +58,7 @@ public final class JavaHttpExecutionEngine implements HttpExecutionEngine {
         HttpClient.Builder builder = HttpClient.newBuilder().executor(workers)
                 .followRedirects(HttpClient.Redirect.NEVER);
         if (sslContext != null) builder.sslContext(sslContext);
+        if (proxy != null) builder.proxy(proxy);
         client = builder.build();
     }
 

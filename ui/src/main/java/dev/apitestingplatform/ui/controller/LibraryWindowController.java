@@ -25,7 +25,7 @@ public final class LibraryWindowController implements AutoCloseable {
     private final HttpExecutionEngine engine;
     private final DraftAutosave autosave;
     private final HistoryService history;
-    private final dev.apitestingplatform.importexport.TransferFiles transferFiles = new dev.apitestingplatform.importexport.TransferFiles();
+    private final dev.apitestingplatform.importexport.TransferFiles transferFiles;
     private HistoryWindow historyWindow;
     private final dev.apitestingplatform.application.run.CollectionRunner collectionRunner;
     private CollectionRunWindow runWindow;
@@ -39,6 +39,9 @@ public final class LibraryWindowController implements AutoCloseable {
     private final Map<UUID, Entry> entries = new LinkedHashMap<>();
     private final boolean offerRecovery;
     private List<LibraryItem> items = List.of();
+    private Map<UUID, LibraryItem> itemIndex = Map.of();
+    private final Map<UUID, TreeItem<LibraryItem>> treeIndex = new HashMap<>();
+    private Map<UUID, List<LibraryItem>> childrenIndex = Map.of();
     private BorderPane root;
     private boolean updating;
     private boolean closed;
@@ -47,6 +50,24 @@ public final class LibraryWindowController implements AutoCloseable {
     private boolean initializedTab;
     private final Set<UUID> recovering = new HashSet<>();
     private Runnable appearanceAction = () -> { };
+    private dev.apitestingplatform.application.operations.AppOperations operations;
+    private OperationsWindow operationsWindow;
+    private Runnable readyAction = () -> { };
+    private boolean readyReported;
+    private dev.apitestingplatform.application.operations.EventLog log = dev.apitestingplatform.application.operations.EventLog.none();
+    public void setEventLog(dev.apitestingplatform.application.operations.EventLog value) { log = Objects.requireNonNull(value); if (collectionRunner != null) collectionRunner.setEventLog(value); }
+
+    public void setOperations(dev.apitestingplatform.application.operations.AppOperations value) { operations = value; }
+    public void setOnReady(Runnable action) { readyAction = Objects.requireNonNull(action); }
+    public void showSettings() {
+        if (operations == null || root == null) return;
+        if (operationsWindow != null && operationsWindow.isShowing()) { operationsWindow.show(); return; }
+        operationsWindow = new OperationsWindow(root.getScene().getWindow(), operations, repository, this::exportWorkspace);
+        operationsWindow.show();
+    }
+    public void reportUnexpectedFailure() {
+        if (!closed) { status.setText("An unexpected operation failed. Editor changes were kept. Retry the action or open Settings to create diagnostics."); }
+    }
 
     public void setAppearanceAction(Runnable action) { appearanceAction = Objects.requireNonNull(action); }
 
@@ -67,6 +88,7 @@ public final class LibraryWindowController implements AutoCloseable {
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository) { this(engine, repository, true); }
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository, boolean offerRecovery) {
         this.engine = engine; this.repository = Objects.requireNonNull(repository); this.offerRecovery = offerRecovery;
+        transferFiles = new dev.apitestingplatform.importexport.TransferFiles(repository.databasePath());
         history = new HistoryService(repository);
         collectionRunner = engine == null ? null : new dev.apitestingplatform.application.run.CollectionRunner(engine, history);
         environments = new EnvironmentControls(repository);
@@ -84,7 +106,7 @@ public final class LibraryWindowController implements AutoCloseable {
                 if (initializedTab && after != null) activateWorkspaceTab(after.id());
             }
         });
-        tree.setId("library-tree"); tree.setShowRoot(false); tree.getRoot().setExpanded(true);
+        tree.setId("library-tree"); tree.setFixedCellSize(28); tree.setShowRoot(false); tree.getRoot().setExpanded(true);
         tree.setCellFactory(view -> new TreeCell<>() {
             @Override protected void updateItem(LibraryItem item, boolean empty) {
                 super.updateItem(item, empty);
@@ -128,6 +150,7 @@ public final class LibraryWindowController implements AutoCloseable {
                 button("Retry recovery save", "library-retry-drafts", this::retryDrafts),
                 button("Recover tabs…", "library-recover", this::offerRecovery),
                 button("Appearance…", "library-appearance", () -> appearanceAction.run()),
+                button("Settings…", "library-settings", this::showSettings),
                 button("Clear temporary variables", "library-clear-temporary", this::clearTemporaryVariables),
                 button("History…", "library-history", this::showHistory), button("Export workspace…", "library-export-workspace", this::exportWorkspace),
                 button("Import workspace…", "library-import-workspace", this::importWorkspace));
@@ -170,7 +193,10 @@ public final class LibraryWindowController implements AutoCloseable {
     }
     private void applyItems(List<LibraryItem> loaded) {
         UUID workspace = workspaces.getValue() == null ? null : workspaces.getValue().id();
-        items = loaded; updating = true;
+        items = loaded;
+        Map<UUID, LibraryItem> indexed = new HashMap<>(); Map<UUID, List<LibraryItem>> children = new HashMap<>();
+        for (var item : items) { indexed.put(item.id(), item); children.computeIfAbsent(item.parentId(), ignored -> new ArrayList<>()).add(item); }
+        itemIndex = indexed; childrenIndex = children; updating = true;
         workspaces.getItems().setAll(items.stream().filter(item -> item.kind() == LibraryItem.Kind.WORKSPACE).toList());
         workspaces.setValue(workspaces.getItems().stream().filter(item -> item.id().equals(workspace)).findFirst()
                 .orElse(workspaces.getItems().isEmpty() ? null : workspaces.getItems().getFirst()));
@@ -178,6 +204,7 @@ public final class LibraryWindowController implements AutoCloseable {
         environments.setWorkspace(workspaces.getValue() == null ? null : workspaces.getValue().id());
         status.getStyleClass().removeAll("validation-error"); status.setText("Local storage ready. Double-click a request to open it.");
         if (!initializedTab && workspaces.getValue() != null) { initializedTab = true; newTab(); }
+        if (!readyReported) { readyReported = true; Platform.runLater(readyAction); }
     }
     private void populateTree() {
         var row = tree.getSelectionModel().getSelectedItem();
@@ -185,9 +212,10 @@ public final class LibraryWindowController implements AutoCloseable {
     }
     private void populateTree(UUID selected) {
         tree.getSelectionModel().clearSelection();
-        tree.getRoot().getChildren().clear();
+        tree.getRoot().getChildren().clear(); treeIndex.clear();
         if (workspaces.getValue() == null) return;
         addChildren(tree.getRoot(), workspaces.getValue().id(), selected);
+        if (selected != null && treeIndex.containsKey(selected)) tree.getSelectionModel().select(treeIndex.get(selected));
     }
     private void refreshSelecting(UUID id, Runnable done) {
         long version = ++refreshVersion;
@@ -209,13 +237,14 @@ public final class LibraryWindowController implements AutoCloseable {
         });
     }
     private void addChildren(TreeItem<LibraryItem> parent, UUID id, UUID selected) {
-        for (var item : items.stream().filter(node -> id.equals(node.parentId())).toList()) {
-            TreeItem<LibraryItem> child = new TreeItem<>(item); child.setExpanded(true); parent.getChildren().add(child);
-            addChildren(child, item.id(), selected);
-            if (item.id().equals(selected)) tree.getSelectionModel().select(child);
+        List<TreeItem<LibraryItem>> children = new ArrayList<>();
+        for (var item : childrenIndex.getOrDefault(id, List.of())) {
+            TreeItem<LibraryItem> child = new TreeItem<>(item); child.setExpanded(true); children.add(child); treeIndex.put(item.id(), child);
+            if (item.kind() != LibraryItem.Kind.REQUEST) addChildren(child, item.id(), selected);
         }
+        parent.getChildren().setAll(children);
     }
-    private LibraryItem byId(UUID id) { return items.stream().filter(item -> item.id().equals(id)).findFirst().orElse(null); }
+    private LibraryItem byId(UUID id) { return id == null ? null : itemIndex.get(id); }
     private LibraryItem selected() {
         var row = tree.getSelectionModel().getSelectedItem(); return row == null ? workspaces.getValue() : row.getValue();
     }
@@ -311,11 +340,16 @@ public final class LibraryWindowController implements AutoCloseable {
         historyWindow.show();
     }
     public CompletionStage<Void> exportWorkspace(UUID workspace, java.nio.file.Path path, boolean includeSecrets) {
-        return repository.exportWorkspace(workspace).thenCompose(snapshot -> transferFiles.workspace(path, snapshot, includeSecrets));
+        UUID operation = transferStarted();
+        return repository.exportWorkspace(workspace).thenCompose(snapshot -> transferFiles.workspace(path, snapshot, includeSecrets)).whenComplete((ignored, failure) -> transferFinished(operation, failure));
     }
     public CompletionStage<UUID> importWorkspace(java.nio.file.Path path) {
-        return transferFiles.read(path).thenCompose(document -> repository.importWorkspace(document.workspace()));
+        UUID operation = transferStarted();
+        return transferFiles.read(path).thenCompose(document -> repository.importWorkspace(document.workspace())).whenComplete((ignored, failure) -> transferFinished(operation, failure));
     }
+    private UUID transferStarted() { UUID id = UUID.randomUUID(); log.record(dev.apitestingplatform.application.operations.EventLog.Level.INFO, dev.apitestingplatform.application.operations.EventLog.Component.TRANSFER, dev.apitestingplatform.application.operations.EventLog.Code.TRANSFER_STARTED, id); return id; }
+    private void transferFinished(UUID id, Throwable failure) { log.record(failure == null ? dev.apitestingplatform.application.operations.EventLog.Level.INFO : dev.apitestingplatform.application.operations.EventLog.Level.WARN, dev.apitestingplatform.application.operations.EventLog.Component.TRANSFER,
+            failure == null ? dev.apitestingplatform.application.operations.EventLog.Code.TRANSFER_FINISHED : dev.apitestingplatform.application.operations.EventLog.Code.TRANSFER_FAILED, id); }
     private void exportWorkspace() {
         LibraryItem workspace = workspaces.getValue(); if (workspace == null) { status.setText("Select a workspace to export."); return; }
         Dialog<Boolean> options = new Dialog<>(); options.initOwner(root.getScene().getWindow()); options.setTitle("Export workspace"); options.setHeaderText("Export the saved workspace as a portable JSON file");
@@ -389,7 +423,7 @@ public final class LibraryWindowController implements AutoCloseable {
     private void open(UUID id, UUID workspace, String title, RequestDraft draft, SavedRequest saved, boolean dirty) {
         if (entries.containsKey(id)) { tabs.getSelectionModel().select(entries.get(id).tab); return; }
         if (entries.size() >= 100) { status.setText("Close a tab before opening more (maximum 100)."); return; }
-        MainWindowController controller = new MainWindowController(engine); controller.requestEditorModel().load(draft);
+        MainWindowController controller = new MainWindowController(engine); controller.setManagedDatabase(repository.databasePath()); controller.requestEditorModel().load(draft);
         Tab tab = new Tab(); tab.setContent(controller.createRequestContent());
         Entry entry = new Entry(id, workspace, controller, tab, title, saved); tab.setUserData(entry);
         controller.setHistory(history, () -> {
@@ -531,6 +565,6 @@ public final class LibraryWindowController implements AutoCloseable {
         }));
     }
     @Override public void close() {
-        if (closed) return; closed = true; if (historyWindow != null) historyWindow.close(); transferFiles.close(); if (runWindow != null) runWindow.close(); if (collectionRunner != null) collectionRunner.close(); collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
+        if (closed) return; closed = true; if (operationsWindow != null) operationsWindow.close(); if (historyWindow != null) historyWindow.close(); transferFiles.close(); if (runWindow != null) runWindow.close(); if (collectionRunner != null) collectionRunner.close(); collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
     }
 }

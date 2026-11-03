@@ -24,6 +24,8 @@ public final class CollectionRunner implements AutoCloseable {
             Thread.ofPlatform().daemon().name("collection-run-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private Job current;
     private boolean closed;
+    private dev.apitestingplatform.application.operations.EventLog log = dev.apitestingplatform.application.operations.EventLog.none();
+    public void setEventLog(dev.apitestingplatform.application.operations.EventLog value) { log = Objects.requireNonNull(value); }
     public CollectionRunner(HttpExecutionEngine engine) { this(engine, null); }
     public CollectionRunner(HttpExecutionEngine engine, HistoryService history) { this.engine = Objects.requireNonNull(engine); this.history = history; }
     public synchronized CompletionStage<Void> cancelAndWait() {
@@ -78,6 +80,7 @@ public final class CollectionRunner implements AutoCloseable {
         private int iteration(int position) { return position / snapshot.requests().size() + 1; }
 
         @Override public void run() {
+            log.record(dev.apitestingplatform.application.operations.EventLog.Level.INFO, dev.apitestingplatform.application.operations.EventLog.Component.RUNNER, dev.apitestingplatform.application.operations.EventLog.Code.RUN_STARTED, historyId);
             Instant started = Instant.now(); RunReport.Status status = RunReport.Status.COMPLETED;
             RunVariables variables = new RunVariables(); int position = 0; boolean stepStarted = false;
             synchronized (this) { thread = Thread.currentThread(); }
@@ -110,6 +113,9 @@ public final class CollectionRunner implements AutoCloseable {
                 Thread.interrupted(); // Cancellation belongs to this job, not to its final history write.
                 try { journal(started, HistoryRecord.State.valueOf(status.name())); } catch (InterruptedException interrupted) { Thread.interrupted(); historyWarning = "History save is pending. Open History and retry pending saves."; }
                 synchronized (CollectionRunner.this) { if (current == this) current = null; }
+                log.record(status == RunReport.Status.COMPLETED ? dev.apitestingplatform.application.operations.EventLog.Level.INFO : dev.apitestingplatform.application.operations.EventLog.Level.WARN,
+                        dev.apitestingplatform.application.operations.EventLog.Component.RUNNER, dev.apitestingplatform.application.operations.EventLog.Code.RUN_FINISHED, historyId,
+                        Map.of(dev.apitestingplatform.application.operations.EventLog.Metric.REQUEST_COUNT, (long) entries.size()));
                 result.complete(new RunReport(historyId, snapshot.collectionId(), started, Instant.now(), status, entries, historyWarning));
             }
         }

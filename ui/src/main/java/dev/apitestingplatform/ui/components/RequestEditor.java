@@ -25,15 +25,25 @@ public final class RequestEditor extends TabPane implements AutoCloseable {
         setId("request-editor-tabs");
         setTabClosingPolicy(TabClosingPolicy.UNAVAILABLE);
         getStyleClass().add("editor-tabs");
-        getTabs().addAll(new Tab("Params", new KeyValueEditor("params", draft.params, false)),
-                new Tab("Headers", new KeyValueEditor("headers", draft.headers, false)),
-                new Tab("Cookies", new KeyValueEditor("cookies", draft.cookies, false)),
-                new Tab("Auth", new AuthenticationEditor(draft)),
-                new Tab("Body", body()), new Tab("Settings", settings()),
-                new Tab("Variables", new VBox(error(draft.variableError, "request-variable-error"), new VariableEditor(draft.variables))),
-                new Tab("Tests", new AssertionEditor(draft)), new Tab("Extract", new ExtractionEditor(draft)));
+        getTabs().addAll(lazy("Params", () -> new KeyValueEditor("params", draft.params, false)),
+                lazy("Headers", () -> new KeyValueEditor("headers", draft.headers, false)),
+                lazy("Cookies", () -> new KeyValueEditor("cookies", draft.cookies, false)),
+                lazy("Auth", () -> new AuthenticationEditor(draft)),
+                lazy("Body", this::body), lazy("Settings", this::settings),
+                lazy("Variables", () -> new VBox(error(draft.variableError, "request-variable-error"), new VariableEditor(draft.variables))),
+                lazy("Tests", () -> new AssertionEditor(draft)), lazy("Extract", () -> new ExtractionEditor(draft)));
+        getSelectionModel().selectedItemProperty().addListener((observable, before, selected) -> initialize(selected));
+        initialize(getSelectionModel().getSelectedItem());
     }
 
+    private static Tab lazy(String name, java.util.function.Supplier<javafx.scene.Node> view) {
+        Tab tab = new Tab(name); tab.setUserData(view); return tab;
+    }
+    @SuppressWarnings("unchecked") private void initialize(Tab tab) {
+        if (tab != null && tab.getContent() == null && tab.getUserData() instanceof java.util.function.Supplier<?> factory) {
+            tab.setContent(((java.util.function.Supplier<javafx.scene.Node>) factory).get()); tab.setUserData(null);
+        }
+    }
     private VBox body() {
         ComboBox<RequestBody.Type> mode = new ComboBox<>(FXCollections.observableArrayList(RequestBody.Type.values()));
         mode.setId("request-body-mode");

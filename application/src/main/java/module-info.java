@@ -4,6 +4,7 @@ module dev.apitestingplatform.application {
     requires com.fasterxml.jackson.databind;
     requires json.path;
     exports dev.apitestingplatform.application;
+    exports dev.apitestingplatform.application.operations;
     exports dev.apitestingplatform.application.http;
     exports dev.apitestingplatform.application.run;
     exports dev.apitestingplatform.application.storage;

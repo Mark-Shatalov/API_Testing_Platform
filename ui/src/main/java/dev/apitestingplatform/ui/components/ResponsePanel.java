@@ -35,7 +35,11 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     private final ReadOnlyBooleanWrapper ready = new ReadOnlyBooleanWrapper(false);
     private final ThreadPoolExecutor work = executor("response-format-", 2);
     private final ThreadPoolExecutor files = executor("response-save-", 1);
-    private final CodeArea content = new CodeArea();
+    private CodeArea content;
+    private java.nio.file.Path managedDatabase;
+    public void setManagedDatabase(java.nio.file.Path database) { managedDatabase = database; }
+    private final StackPane bodyHost = new StackPane(new Label("Send a request to inspect its response."));
+    private final Button copyBody = new Button("Copy selection");
     private final ComboBox<Mode> mode = new ComboBox<>();
     private final TextField query = new TextField();
     private final Label notice = new Label("Send a request to inspect its response.");
@@ -149,12 +153,11 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         Button next = new Button("Find next");
         next.setId("response-find-next");
         next.setOnAction(event -> search(false));
-        Button copy = new Button("Copy selection");
+        Button copy = copyBody;
         copy.setId("response-copy");
-        copy.setOnAction(event -> content.copy());
-        copy.disableProperty().bind(javafx.beans.binding.Bindings.createBooleanBinding(
-                () -> content.getSelectedText().isEmpty(), content.selectedTextProperty()));
-        save.setId("response-save");
+        copy.setOnAction(event -> { if (content != null) content.copy(); });
+        copy.setDisable(true);
+        save.setId("response-save"); fileStatus.setId("response-file-status");
         save.setDisable(true);
         save.setOnAction(event -> chooseSaveFile());
         FlowPane actions = new FlowPane(8, 6, mode, copy, save, fileStatus);
@@ -162,13 +165,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         searchBar.setAlignment(Pos.CENTER_LEFT);
         actions.getStyleClass().add("response-actions");
         searchBar.getStyleClass().add("response-search-bar");
-        content.setId("response-content");
-        content.setEditable(false);
-        content.setWrapText(false);
-        content.setParagraphGraphicFactory(LineNumberFactory.get(content));
-        content.getStyleClass().add("response-code");
-        VirtualizedScrollPane<CodeArea> scroll = new VirtualizedScrollPane<>(content);
-        VBox.setVgrow(scroll, Priority.ALWAYS);
+        VBox.setVgrow(bodyHost, Priority.ALWAYS);
         detail.setWrapText(true);
         detail.getStyleClass().add("response-detail");
         previousPage.setOnAction(event -> { pageStart = Math.max(0, pageStart - ResponsePresentation.PAGE_SIZE); renderPage(); });
@@ -178,9 +175,16 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         pages.setAlignment(Pos.CENTER_LEFT);
         previousPage.setDisable(true);
         nextPage.setDisable(true);
-        return new VBox(actions, searchBar, detail, scroll, pages);
+        return new VBox(actions, searchBar, detail, bodyHost, pages);
     }
 
+    private void ensureContent() {
+        if (content != null) return;
+        content = new CodeArea(); content.setId("response-content"); content.setEditable(false); content.setWrapText(false);
+        content.setParagraphGraphicFactory(LineNumberFactory.get(content)); content.getStyleClass().add("response-code");
+        bodyHost.getChildren().setAll(new VirtualizedScrollPane<>(content));
+        copyBody.disableProperty().bind(javafx.beans.binding.Bindings.createBooleanBinding(() -> content.getSelectedText().isEmpty(), content.selectedTextProperty()));
+    }
     public ReadOnlyObjectProperty<ResponseState> stateProperty() { return state.getReadOnlyProperty(); }
     public ReadOnlyBooleanProperty readyProperty() { return ready.getReadOnlyProperty(); }
 
@@ -286,7 +290,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         work.purge();
         response = null; presentation = null; pageStart = 0; lastMatch = -1; lastQuery = "";
         ready.set(false);
-        content.clear(); content.getUndoManager().forgetHistory();
+        if (content != null) { content.clear(); content.getUndoManager().forgetHistory(); }
         headers.getItems().clear(); cookies.getItems().clear(); tests.getItems().clear();
         extractions.getItems().clear(); extractionSummary.setText("No extractions configured for this response.");
         testSummary.setText("No checks configured for this response.");
@@ -318,6 +322,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         if (pageStart > 0 && Character.isLowSurrogate(source.charAt(pageStart))) pageStart--;
         if (end < source.length() && end > 0 && Character.isHighSurrogate(source.charAt(end - 1))) end--;
         String page = source.substring(pageStart, end);
+        ensureContent();
         content.replaceText(page); content.getUndoManager().forgetHistory();
         if (!page.isEmpty() && mode.getValue() == Mode.Pretty) content.setStyleSpans(0, JsonHighlighting.styles(page));
         else if (!page.isEmpty()) content.setStyle(0, page.length(), List.of());
@@ -377,7 +382,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         try {
             files.execute(() -> {
                 String message;
-                try { ResponseBodyFiles.save(snapshot, destination); message = "Saved captured bytes"; }
+                try { ResponseBodyFiles.save(snapshot, managedDatabase == null ? destination : dev.apitestingplatform.application.operations.ManagedFiles.output(managedDatabase, destination, false)); message = "Saved captured bytes"; }
                 catch (java.io.IOException | RuntimeException failure) { message = "Unable to save response body"; }
                 String finalMessage = message;
                 Platform.runLater(() -> {
@@ -418,6 +423,6 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     @Override public void close() {
         requireFxThread();
         closed = true; revision++; searchRevision++;
-        work.shutdownNow(); files.shutdownNow(); content.dispose();
+        work.shutdownNow(); files.shutdownNow(); if (content != null) content.dispose();
     }
 }

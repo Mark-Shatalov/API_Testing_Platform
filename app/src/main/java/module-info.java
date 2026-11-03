@@ -1,5 +1,7 @@
 module dev.apitestingplatform.app {
     requires javafx.controls;
+    requires java.desktop;
+    requires java.management;
     requires dev.apitestingplatform.ui;
     // Response debugging tests inspect CodeArea directly; declare this for IDE compilers too.
     requires static org.fxmisc.richtext;

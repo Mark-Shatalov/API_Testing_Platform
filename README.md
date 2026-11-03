@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Steps 4–16 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports and portable workspace import/export. Operational settings, diagnostics and release packaging remain later increments.
+Steps 4–18 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports, portable workspace import/export, operational settings, database backup/restore and safe diagnostics. Performance and failure recovery have measured workloads. Windows installation and release delivery remain steps 19–20.
 
 ## Module structure
 
@@ -30,7 +30,7 @@ A global Maven installation is not required. The Maven Wrapper downloads the con
 From PowerShell in the repository root:
 
 ```powershell
-$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot"
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-25.0.5.8-hotspot"
 .\mvnw.cmd clean verify
 ```
 
@@ -162,6 +162,24 @@ The explicit **Include secret values and request payloads in plain text** checkb
 **Import workspace…** validates the entire file before changing the database, then creates a separate workspace named `… (imported)` with fresh hierarchy/environment IDs and remapped references. Existing data and unsaved tabs are kept; nothing is executed. Failed parsing, reference validation, encryption or SQL rolls back without a partial workspace. Unknown fields/versions are rejected with an explanation.
 
 Limits: 32 MiB file, 10,000 hierarchy items, 100 environments, existing per-draft/per-variable budgets, JSON nesting depth 100 and duplicate-key detection. Export snapshot admission also caps protected source payloads at 48 MiB; default secret masking caps 4,096 distinct known credential values / 2 MiB credential characters. Oversized workspaces must be split. File parsing/writing and all SQLite/encryption work stay off JavaFX. Failed/unsupported atomic replacement leaves the previous destination intact. See [Step 16 portable transfer](docs/step-16-portable-transfer.md).
+
+## Settings, backups and diagnostics
+
+Open **Settings…** in the top toolbar. Choose Direct, System or Manual proxy, an optional additional CA certificate bundle and a response capture/preview limit of 64–10,240 KiB (default 10 MiB). **Save network settings**, then restart to apply them. Certificate and hostname validation stay enabled; extra CA certificates add trust to the JVM defaults. An invalid/missing CA at startup falls back to JVM trust, preserving proxy/capture settings and displaying a notice in Settings. Proxy authentication is not provided by this settings screen. Preferences live in `operations.properties` beside the database.
+
+The window also shows data/database/log paths and the existing history retention settings. Retention changes apply immediately. **Open Logs Folder** opens the bounded structured event logs. **Create diagnostic archive…** exports a ZIP containing only a version/settings summary and whitelisted log events. Database files, request/response payloads, URLs, credentials, variable values, paths, certificate files and proxy addresses are excluded. Logs have timestamps, levels, component names and correlation IDs; they retain at most four 512 KiB files.
+
+**Back up database…** creates and verifies a consistent SQLite snapshot while the app is running. It includes saved workspaces, requests, environments, history and committed recovery drafts; unsaved edits still in the autosave debounce window and the separate appearance/network preference files are excluded. Database payload encryption remains tied to the current Windows profile. Use the existing **Export workspace…** for a portable JSON copy.
+
+**Restore after restart…** verifies a completed backup, then stages it without changing the active database. **Cancel pending restore** cancels it. Close normally and restart to apply: the app keeps the current database and any WAL/SHM sidecars in `recovery-backups` before replacing them. Restore replaces the database with the snapshot, so changes made after the snapshot will be in the automatic pre-restore copy. Interrupted activation rolls back from verified safety copies before reopening SQLite. Settings/diagnostics and restore staging remain accessible when database startup fails. Backups with incompatible schemas, extra triggers/views, invalid references, corrupt data or payloads unreadable by this Windows profile are rejected. Manual backups are limited to 1 GiB; automatic safety copies remain until you remove them. Exports cannot replace managed data, settings, logs or automatic recovery copies.
+
+See [Step 17 settings and recovery](docs/step-17-operations.md) for exact behavior and checks.
+
+## Performance and failure recovery
+
+Navigation indexes tree items and children once, and uses fixed-height virtualized rows. Request tabs create controls when first selected; the response code editor is created when a response arrives. Draft values remain in the view model, including inactive tabs. Network, storage, encryption, backup/restore and diagnostics run on bounded background workers. Storage lock/access/full/corruption errors show safe retry/recovery guidance while preserving editor changes.
+
+Measured startup, navigation for 10,000 saved requests, opening eight distinct requests, a 500-request loopback run and memory use are documented with their method and limits in [Step 18 performance report](docs/step-18-performance.md). The optional workload runs with `-Dplatform.performance=true`; normal test runs skip that workload. Timing goals are measured, not imposed as hardware-dependent unit-test thresholds.
 
 ## HTTP engine
 

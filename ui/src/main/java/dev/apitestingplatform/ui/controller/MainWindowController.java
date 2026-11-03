@@ -79,6 +79,8 @@ public final class MainWindowController implements AutoCloseable {
     }
     private long submission;
     private ResponsePanel responsePanel;
+    private java.nio.file.Path managedDatabase;
+    public void setManagedDatabase(java.nio.file.Path database) { managedDatabase = database; }
     private RequestExecution active;
     private boolean closed;
     private final Label target = new Label("Preview the resolved target before sending.");
@@ -168,6 +170,7 @@ public final class MainWindowController implements AutoCloseable {
         requestEditor.getStyleClass().add("request-editor");
 
         responsePanel = new ResponsePanel(viewModel);
+        responsePanel.setManagedDatabase(managedDatabase);
         SplitPane requestAndResponse = new SplitPane(requestEditor, responsePanel);
         requestAndResponse.setOrientation(Orientation.VERTICAL);
         requestAndResponse.setDividerPositions(0.55);
