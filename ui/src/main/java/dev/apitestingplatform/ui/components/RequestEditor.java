@@ -31,7 +31,7 @@ public final class RequestEditor extends TabPane implements AutoCloseable {
                 new Tab("Auth", new AuthenticationEditor(draft)),
                 new Tab("Body", body()), new Tab("Settings", settings()),
                 new Tab("Variables", new VBox(error(draft.variableError, "request-variable-error"), new VariableEditor(draft.variables))),
-                new Tab("Tests", new AssertionEditor(draft)));
+                new Tab("Tests", new AssertionEditor(draft)), new Tab("Extract", new ExtractionEditor(draft)));
     }
 
     private VBox body() {

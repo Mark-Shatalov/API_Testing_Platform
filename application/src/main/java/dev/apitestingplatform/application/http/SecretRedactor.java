@@ -10,10 +10,12 @@ public final class SecretRedactor {
     private static final Set<String> STANDARD_HEADERS = Set.of("authorization", "proxy-authorization", "cookie", "set-cookie");
     private static final Set<String> STANDARD_QUERY = Set.of("token", "access_token", "api_key", "apikey", "password", "secret");
     private final List<String> values;
+    private final List<String> sourceValues;
     private final java.util.regex.Pattern replacements;
     private final Set<String> headers;
     private final Set<String> query;
     public SecretRedactor(Collection<String> values, Collection<String> headers, Collection<String> query) {
+        sourceValues = values.stream().filter(Objects::nonNull).toList();
         Set<String> expanded = new HashSet<>();
         for (String value : values) if (value != null && !value.isEmpty()) {
             expanded.add(value);
@@ -25,6 +27,10 @@ public final class SecretRedactor {
         replacements = this.values.isEmpty() ? null : java.util.regex.Pattern.compile("\\[secret\\]|%5[Bb]secret%5[Dd]|" + String.join("|", this.values.stream().map(java.util.regex.Pattern::quote).toList()));
         Set<String> names = new HashSet<>(STANDARD_HEADERS); for (String name : headers) names.add(name.toLowerCase(Locale.ROOT)); this.headers = Set.copyOf(names);
         names = new HashSet<>(STANDARD_QUERY); for (String name : query) names.add(name.toLowerCase(Locale.ROOT)); this.query = Set.copyOf(names);
+    }
+    public SecretRedactor withSecrets(Collection<String> additional) {
+        List<String> combined = new ArrayList<>(sourceValues); combined.addAll(additional);
+        return new SecretRedactor(combined, headers, query);
     }
     public static SecretRedactor empty() { return new SecretRedactor(List.of(), List.of(), List.of()); }
     public String text(String input) {

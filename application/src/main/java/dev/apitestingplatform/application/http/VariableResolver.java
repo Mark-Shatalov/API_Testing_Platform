@@ -6,10 +6,12 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Pure, bounded template resolution. Request > environment > workspace; inputs are never mutated. */
+/** Pure, bounded template resolution. Request > run > environment > workspace; inputs are never mutated. */
 public final class VariableResolver {
-    public record Context(List<Variable> workspace, List<Variable> environment) {
-        public Context { workspace = List.copyOf(workspace); environment = List.copyOf(environment); }
+    public record Context(List<Variable> workspace, List<Variable> environment, List<Variable> run) {
+        public Context(List<Variable> workspace, List<Variable> environment) { this(workspace, environment, List.of()); }
+        public Context { workspace = List.copyOf(workspace); environment = List.copyOf(environment); run = List.copyOf(run); }
+        public Context withRun(List<Variable> values) { return new Context(workspace, environment, values); }
         public static Context empty() { return new Context(List.of(), List.of()); }
     }
     public record Resolved(RequestConfiguration request, String preview, List<RequestValidation.Issue> issues, SecretRedactor redactor) {
@@ -19,6 +21,7 @@ public final class VariableResolver {
     }
     private record Value(String text, String masked, boolean secret) { }
     private final Map<String, Variable> variables = new HashMap<>();
+    private final Set<String> literalVariables = new HashSet<>();
     private final Map<String, Value> cache = new HashMap<>();
     private final Set<String> visiting = new HashSet<>();
     private final List<RequestValidation.Issue> issues = new ArrayList<>();
@@ -26,11 +29,13 @@ public final class VariableResolver {
     private int budget = 32 * 1024 * 1024;
 
     private VariableResolver(Context context, List<Variable> local) {
-        for (var scope : List.of(context.workspace(), context.environment(), local)) {
+        for (var scope : List.of(context.workspace(), context.environment(), context.run(), local)) {
             Variable.validate(scope); scope.forEach(variable -> {
                 variables.put(variable.name(), variable); if (variable.secret()) secrets.add(variable.value());
             });
         }
+        context.run().forEach(value -> literalVariables.add(value.name()));
+        local.forEach(value -> literalVariables.remove(value.name()));
     }
     public static Resolved resolve(RequestConfiguration template, Context context, List<Variable> local) {
         return resolve(template, context, local, Authentication.none());
@@ -110,10 +115,10 @@ public final class VariableResolver {
     private Value variable(String name, int depth) {
         if (cache.containsKey(name)) return cache.get(name);
         Variable variable = variables.get(name);
-        if (variable == null) throw new IllegalArgumentException("Unknown variable {{" + name + "}}. Define it in request variables, the environment or workspace.");
+        if (variable == null) throw new IllegalArgumentException("Unknown variable {{" + name + "}}. Define it in request variables, extract it from an earlier response in this session, or set it in the environment or workspace.");
         if (!visiting.add(name)) throw new IllegalArgumentException("Variable cycle involving {{" + name + "}}. Remove the circular reference.");
         try {
-            Value expanded = expand(variable.value(), depth + 1);
+            Value expanded = literalVariables.contains(name) ? new Value(variable.value(), variable.value(), variable.secret()) : expand(variable.value(), depth + 1);
             boolean secret = variable.secret() || expanded.secret();
             if (secret) secrets.add(expanded.text());
             Value value = new Value(expanded.text(), secret ? "[secret]" : expanded.masked(), secret);

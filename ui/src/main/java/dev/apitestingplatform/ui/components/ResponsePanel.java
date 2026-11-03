@@ -1,6 +1,7 @@
 package dev.apitestingplatform.ui.components;
 
 import dev.apitestingplatform.domain.http.ExecutionResult;
+import dev.apitestingplatform.domain.http.ExtractionResult;
 import dev.apitestingplatform.domain.http.HttpStatus;
 import dev.apitestingplatform.ui.response.*;
 import dev.apitestingplatform.ui.viewmodel.MainWindowViewModel;
@@ -51,6 +52,8 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     private final TableView<ResponsePresentation.CookieRow> cookies = table("No response cookies");
     private final TableView<ResponseTestResult> tests = table("No assertions configured for this response");
     private final Label testSummary = new Label("No checks configured for this response.");
+    private final TableView<ExtractionResult> extractions = table("No extraction rules configured for this response");
+    private final Label extractionSummary = new Label("No extractions configured for this response.");
     private ResponsePresentation presentation;
     private ExecutionResult response;
     private Future<?> preparation;
@@ -111,8 +114,12 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
                 detailColumn("Expected", ResponseTestResult::expected, 150), detailColumn("Actual", ResponseTestResult::actual, 150), detailColumn("Details", ResponseTestResult::details, 350)));
         rowCopy(tests, row -> row.name() + "\t" + row.outcome() + "\t" + row.expected() + "\t" + row.actual() + "\t" + row.details());
         VBox testView = new VBox(testSummary, tests); VBox.setVgrow(tests, Priority.ALWAYS);
+        extractions.setId("response-extraction-results"); extractionSummary.setId("response-extraction-summary"); extractionSummary.getStyleClass().add("test-summary");
+        extractions.getColumns().addAll(List.of(column("Variable", ExtractionResult::variable, 170), column("Result", row -> row.outcome().name().replace('_', ' '), 120), detailColumn("Details", ExtractionResult::details, 560)));
+        rowCopy(extractions, row -> row.variable() + "\t" + row.outcome() + "\t" + row.details());
+        VBox extractionView = new VBox(extractionSummary, extractions); VBox.setVgrow(extractions, Priority.ALWAYS);
         TabPane tabs = new TabPane(new Tab("Body", bodyView()), new Tab("Headers", headers),
-                new Tab("Cookies", cookies), new Tab("Test Results", testView));
+                new Tab("Cookies", cookies), new Tab("Extraction Results", extractionView), new Tab("Test Results", testView));
         tabs.setId("response-tabs");
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         tabs.getStyleClass().add("response-tabs");
@@ -252,6 +259,15 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
                 + copy.stream().filter(row -> row.outcome() == dev.apitestingplatform.domain.http.AssertionResult.Outcome.NOT_RUN).count() + " not run · "
                 + copy.stream().filter(row -> row.outcome() == dev.apitestingplatform.domain.http.AssertionResult.Outcome.DISABLED).count() + " disabled");
     }
+    public void showExtractions(List<ExtractionResult> results) {
+        extractions.getItems().setAll(results);
+        extractionSummary.setText(results.isEmpty() ? "No extractions configured for this response." :
+                results.stream().filter(row -> row.outcome() == ExtractionResult.Outcome.EXTRACTED).count() + " extracted · " +
+                results.stream().filter(row -> row.outcome() == ExtractionResult.Outcome.FAILED).count() + " failed · " +
+                results.stream().filter(row -> row.outcome() == ExtractionResult.Outcome.NOT_RUN).count() + " not run · " +
+                results.stream().filter(row -> row.outcome() == ExtractionResult.Outcome.DISABLED).count() + " disabled — values are masked");
+    }
+    public void showExtractionsPending() { extractionSummary.setText("Extracting response data…"); }
     public void showTestsPending() { testSummary.setText("Checking response…"); }
     private static <T> TableColumn<T, String> detailColumn(String name, Function<T, String> value, int width) {
         TableColumn<T, String> column = column(name, value, width);
@@ -272,6 +288,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         ready.set(false);
         content.clear(); content.getUndoManager().forgetHistory();
         headers.getItems().clear(); cookies.getItems().clear(); tests.getItems().clear();
+        extractions.getItems().clear(); extractionSummary.setText("No extractions configured for this response.");
         testSummary.setText("No checks configured for this response.");
         mode.setDisable(true); save.setDisable(true);
         previousPage.setDisable(true); nextPage.setDisable(true);

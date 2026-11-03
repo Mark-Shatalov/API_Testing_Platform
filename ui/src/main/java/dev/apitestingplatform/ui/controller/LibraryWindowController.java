@@ -30,6 +30,7 @@ public final class LibraryWindowController implements AutoCloseable {
     private final TabPane tabs = new TabPane();
     private final Label status = new Label("Opening local storage…");
     private final Label recoveryStatus = new Label("Recovery: no pending edits");
+    private final Map<UUID, dev.apitestingplatform.application.http.RunVariables> collectionSessions = new HashMap<>();
     private final Map<UUID, Entry> entries = new LinkedHashMap<>();
     private final boolean offerRecovery;
     private List<LibraryItem> items = List.of();
@@ -118,7 +119,8 @@ public final class LibraryWindowController implements AutoCloseable {
                 button("Refresh", "library-refresh", this::refresh),
                 button("Retry recovery save", "library-retry-drafts", this::retryDrafts),
                 button("Recover tabs…", "library-recover", this::offerRecovery),
-                button("Appearance…", "library-appearance", () -> appearanceAction.run()));
+                button("Appearance…", "library-appearance", () -> appearanceAction.run()),
+                button("Clear temporary variables", "library-clear-temporary", this::clearTemporaryVariables));
         recoveryStatus.setId("library-autosave-status"); toolbar.getChildren().add(recoveryStatus);
         toolbar.getStyleClass().add("library-toolbar");
         status.setId("library-status"); status.setWrapText(true); status.getStyleClass().add("status-bar");
@@ -323,6 +325,7 @@ public final class LibraryWindowController implements AutoCloseable {
         MainWindowController controller = new MainWindowController(engine); controller.requestEditorModel().load(draft);
         Tab tab = new Tab(); tab.setContent(controller.createRequestContent());
         Entry entry = new Entry(id, workspace, controller, tab, title, saved); tab.setUserData(entry);
+        controller.setRunVariables(() -> sessionFor(entry));
         controller.setVariableContext(() -> repository.loadVariables(entry.workspaceId).thenApply(values ->
                 new dev.apitestingplatform.application.http.VariableResolver.Context(values.variables(), values.selectedVariables())));
         tab.textProperty().bind(entry.title.concat(javafx.beans.binding.Bindings.when(controller.requestEditorModel().dirtyProperty()).then(" *").otherwise("")));
@@ -334,6 +337,19 @@ public final class LibraryWindowController implements AutoCloseable {
         tab.setOnCloseRequest(event -> { event.consume(); closeTab(entry); });
         entries.put(id, entry); tabs.getTabs().add(tab); tabs.getSelectionModel().select(tab);
         if (dirty) controller.requestEditorModel().markDirty();
+    }
+    private dev.apitestingplatform.application.http.RunVariables sessionFor(Entry entry) {
+        LibraryItem item = entry.saved == null ? null : byId(entry.saved.item().parentId());
+        while (item != null && item.kind() == LibraryItem.Kind.FOLDER) item = byId(item.parentId());
+        UUID scope = item != null && item.kind() == LibraryItem.Kind.COLLECTION ? item.id() : entry.tabId;
+        var existing = collectionSessions.get(scope); if (existing != null) return existing;
+        if (collectionSessions.size() >= 100) throw new IllegalStateException("Clear temporary sessions before opening more.");
+        var created = new dev.apitestingplatform.application.http.RunVariables(); collectionSessions.put(scope, created); return created;
+    }
+    private void clearTemporaryVariables() {
+        collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear();
+        entries.values().forEach(entry -> entry.editor.clearPrivateSession());
+        status.setText("All temporary variables cleared. Saved environments and request definitions are unchanged.");
     }
     private Entry active() { return tabs.getSelectionModel().getSelectedItem() == null ? null : (Entry) tabs.getSelectionModel().getSelectedItem().getUserData(); }
     public MainWindowController activeEditor() { return active() == null ? null : active().editor; }
@@ -439,6 +455,6 @@ public final class LibraryWindowController implements AutoCloseable {
         }));
     }
     @Override public void close() {
-        if (closed) return; closed = true; environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
+        if (closed) return; closed = true; collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
     }
 }

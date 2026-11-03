@@ -9,6 +9,19 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class RequestEditorViewModelTest {
+    @Test void extractionDefinitionsKeepOrderIdentityAndDraftErrorsWithoutRuntimeValues() {
+        var model = new RequestEditorViewModel(new MainWindowViewModel());
+        model.extractions.add(new RequestEditorViewModel.ExtractionRow());
+        var second = new RequestEditorViewModel.ExtractionRow(); second.variable.set("id"); second.path.set("$.id"); model.extractions.add(second);
+        var captured = model.capture(); var restored = new RequestEditorViewModel(new MainWindowViewModel()); restored.load(captured);
+        assertThat(restored.capture().extractions()).isEqualTo(captured.extractions()); assertThat(restored.dirtyProperty().get()).isFalse();
+        restored.extractions.getFirst().path.set("$.changed"); assertThat(restored.dirtyProperty().get()).isTrue();
+        assertThat(captured.extractions().getFirst().path()).isEqualTo("$.access_token");
+        restored.showIssues(List.of(new RequestValidation.Issue("extractions.1", "Invalid extraction")));
+        assertThat(restored.extractions.get(1).error.get()).isEqualTo("Invalid extraction");
+        restored.clearErrors(); assertThat(restored.extractions.get(1).error.get()).isEmpty();
+    }
+
     @Test void orderedAssertionsRoundTripAndInFlightSnapshotsRemainUnchanged() {
         var model = new RequestEditorViewModel(new MainWindowViewModel());
         model.assertions.add(new RequestEditorViewModel.AssertionRow("First"));

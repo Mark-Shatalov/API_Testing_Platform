@@ -75,7 +75,7 @@ class ResponseViewerFxTest {
             assertThat(code.getText()).contains("\n", "\"message\" : \"hello\"");
             assertThat(panel.stateProperty().get()).isEqualTo(ResponseState.SUCCESS);
             TabPane tabs = (TabPane) panel.lookup("#response-tabs");
-            assertThat(tabs.getTabs()).extracting(Tab::getText).containsExactly("Body", "Headers", "Cookies", "Test Results");
+            assertThat(tabs.getTabs()).extracting(Tab::getText).containsExactly("Body", "Headers", "Cookies", "Extraction Results", "Test Results");
             for (Tab tab : tabs.getTabs()) tabs.getSelectionModel().select(tab);
             tabs.getSelectionModel().selectFirst();
             ComboBox<?> mode = (ComboBox<?>) panel.lookup("#response-mode");
@@ -121,7 +121,7 @@ class ResponseViewerFxTest {
             assertThat(panel.stateProperty().get()).isEqualTo(ResponseState.HTTP_ERROR);
             panel.showTests(List.of(new ResponseTestResult("Expected status", false, "Expected 200; received 404")));
             TabPane tabs = (TabPane) panel.lookup("#response-tabs");
-            assertThat(((TableView<?>) tabs.getTabs().get(3).getContent().lookup("#response-test-results")).getItems()).hasSize(1);
+            assertThat(((TableView<?>) tabs.getTabs().stream().filter(tab -> tab.getText().equals("Test Results")).findFirst().orElseThrow().getContent().lookup("#response-test-results")).getItems()).hasSize(1);
             return null;
         });
     }
