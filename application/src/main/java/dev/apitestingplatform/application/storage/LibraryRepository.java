@@ -9,6 +9,7 @@ import java.util.concurrent.CompletionStage;
 /** Asynchronous application port. Implementations must never run database work on the caller thread. */
 public interface LibraryRepository extends AutoCloseable {
     CompletionStage<List<LibraryItem>> list();
+    CompletionStage<dev.apitestingplatform.domain.run.CollectionSnapshot> snapshotCollection(UUID collectionId);
     CompletionStage<LibraryItem> create(LibraryItem.Kind kind, UUID parentId, String name);
     CompletionStage<SavedRequest> createRequest(UUID parentId, String name, RequestDraft draft);
     CompletionStage<LibraryItem> rename(UUID id, String name);

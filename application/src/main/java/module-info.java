@@ -5,6 +5,7 @@ module dev.apitestingplatform.application {
     requires json.path;
     exports dev.apitestingplatform.application;
     exports dev.apitestingplatform.application.http;
+    exports dev.apitestingplatform.application.run;
     exports dev.apitestingplatform.application.storage;
 }
 

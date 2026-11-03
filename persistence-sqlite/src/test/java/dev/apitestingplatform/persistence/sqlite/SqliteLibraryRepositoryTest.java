@@ -38,6 +38,36 @@ class SqliteLibraryRepositoryTest {
                 "0.125", RedirectPolicy.NEVER, HttpProtocol.HTTP_1_1);
     }
 
+    @Test void collectionSnapshotKeepsTreeOrderAndSavedEnvironmentDespiteLaterEditsAndDeletion() throws Exception {
+        var repository = open(); var collection = collection(repository); var folder = await(repository.create(LibraryItem.Kind.FOLDER, collection.id(), "Folder"));
+        var first = await(repository.createRequest(folder.id(), "Folder first", draft("first")));
+        var second = await(repository.createRequest(folder.id(), "Folder second", draft("second")));
+        var last = await(repository.createRequest(collection.id(), "Direct last", draft("last")));
+        UUID workspace = collection.parentId();
+        await(repository.saveWorkspaceVariables(workspace, 0, List.of(new dev.apitestingplatform.domain.variables.Variable("base", "workspace-snapshot", false))));
+        var environment = await(repository.createEnvironment(workspace, "Selected", List.of(new dev.apitestingplatform.domain.variables.Variable("token", "snapshot-private-token", true))));
+        await(repository.selectEnvironment(workspace, environment.id()));
+        await(repository.reorder(second.item().id(), 0));
+        var snapshot = await(repository.snapshotCollection(collection.id()));
+        assertThat(snapshot.requests()).extracting(request -> request.item().id()).containsExactly(second.item().id(), first.item().id(), last.item().id());
+        assertThat(snapshot.environmentId()).isEqualTo(environment.id()); assertThat(snapshot.environmentName()).isEqualTo("Selected");
+        assertThat(snapshot.environmentVariables().getFirst().value()).isEqualTo("snapshot-private-token");
+        await(repository.save(last.item().id(), last.item().version(), draft("new content"))); await(repository.delete(folder.id()));
+        await(repository.selectEnvironment(workspace, null)); await(repository.deleteEnvironment(environment.id(), environment.version()));
+        assertThat(snapshot.requests()).hasSize(3); assertThat(snapshot.requests().getLast().draft().bodyText()).isEqualTo("last");
+        assertThat(snapshot.workspaceVariables().getFirst().value()).isEqualTo("workspace-snapshot");
+        assertThat(snapshot.toString()).doesNotContain("snapshot-private-token");
+        assertThat(await(repository.snapshotCollection(collection.id())).requests()).hasSize(1);
+        assertThat(await(repository.snapshotCollection(collection.id())).environmentVariables()).isEmpty();
+    }
+    @Test void snapshotRejectsNonCollectionsAndSupportsEmptyCollectionWithoutChangingData() throws Exception {
+        var repository = open(); var collection = collection(repository);
+        assertThat(await(repository.snapshotCollection(collection.id())).requests()).isEmpty();
+        assertThatThrownBy(() -> await(repository.snapshotCollection(collection.parentId()))).hasCauseInstanceOf(StorageException.class);
+        assertThatThrownBy(() -> await(repository.snapshotCollection(UUID.randomUUID()))).hasCauseInstanceOf(StorageException.class);
+        assertThat(await(repository.list())).hasSize(2);
+    }
+
     @Test void createsFullSchemaWalAndStableOrderedHierarchyAndRejectsNestedFolders() throws Exception {
         var repository = open(); var collection = collection(repository);
         var folder = await(repository.create(LibraryItem.Kind.FOLDER, collection.id(), "Folder"));

@@ -24,6 +24,8 @@ public final class LibraryWindowController implements AutoCloseable {
     private final LibraryRepository repository;
     private final HttpExecutionEngine engine;
     private final DraftAutosave autosave;
+    private final dev.apitestingplatform.application.run.CollectionRunner collectionRunner;
+    private CollectionRunWindow runWindow;
     private final EnvironmentControls environments;
     private final ComboBox<LibraryItem> workspaces = new ComboBox<>();
     private final TreeView<LibraryItem> tree = new TreeView<>(new TreeItem<>());
@@ -62,6 +64,7 @@ public final class LibraryWindowController implements AutoCloseable {
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository) { this(engine, repository, true); }
     public LibraryWindowController(HttpExecutionEngine engine, LibraryRepository repository, boolean offerRecovery) {
         this.engine = engine; this.repository = Objects.requireNonNull(repository); this.offerRecovery = offerRecovery;
+        collectionRunner = engine == null ? null : new dev.apitestingplatform.application.run.CollectionRunner(engine);
         environments = new EnvironmentControls(repository);
         autosave = new DraftAutosave(repository, Duration.ofMillis(750), failure -> Platform.runLater(() -> {
             if (!closed) { recoveryStatus.setText("Recovery save failed — use Retry recovery save"); error(failure); }
@@ -95,7 +98,8 @@ public final class LibraryWindowController implements AutoCloseable {
         FlowPane actions = new FlowPane(6, 6, button("Open", "library-open", this::openSelected),
                 button("Rename", "library-rename", this::rename), button("Delete", "library-delete", this::delete),
                 button("Move up", "library-up", () -> reorder(-1)), button("Move down", "library-down", () -> reorder(1)),
-                button("Workspace…", "library-workspace-menu", this::workspaceActions));
+                button("Workspace…", "library-workspace-menu", this::workspaceActions),
+                button("Run collection…", "library-run-collection", this::runSelectedCollection));
         Label hint = new Label("Double-click a request to open it. Select a collection to add a folder or request."); hint.setWrapText(true);
         hint.setMinHeight(Region.USE_PREF_SIZE);
         Label empty = new Label("No collections yet. Use + Collection to organize your requests."); empty.setWrapText(true);
@@ -296,6 +300,29 @@ public final class LibraryWindowController implements AutoCloseable {
         int target = selected.position() + delta; if (target < 0 || target >= count) return;
         perform(repository.reorder(selected.id(), target), ignored -> refresh());
     }
+    private void runSelectedCollection() {
+        if (collectionRunner == null) { status.setText("HTTP engine is unavailable."); return; }
+        LibraryItem item = selected();
+        if (item == null && active() != null && active().saved != null) item = active().saved.item();
+        while (item != null && item.kind() != LibraryItem.Kind.COLLECTION && item.kind() != LibraryItem.Kind.WORKSPACE) item = byId(item.parentId());
+        if (item == null || item.kind() != LibraryItem.Kind.COLLECTION) {
+            var choices = items.stream().filter(value -> value.kind() == LibraryItem.Kind.COLLECTION && workspaces.getValue() != null && value.parentId().equals(workspaces.getValue().id())).toList();
+            if (choices.isEmpty()) { status.setText("Create a collection and save requests before running it."); return; }
+            if (choices.size() == 1) item = choices.getFirst();
+            else {
+                ChoiceDialog<LibraryItem> dialog = new ChoiceDialog<>(choices.getFirst(), choices); dialog.setTitle("Run collection"); dialog.setHeaderText("Choose the collection to run"); dialog.initOwner(root.getScene().getWindow());
+                item = dialog.showAndWait().orElse(null);
+            }
+        }
+        if (item != null) showCollectionRun(item.id());
+    }
+    public void showCollectionRun(UUID collectionId) {
+        if (collectionRunner == null) { status.setText("HTTP engine is unavailable."); return; }
+        if (runWindow != null && runWindow.isShowing()) { runWindow.show(); return; }
+        LibraryItem collection = byId(collectionId);
+        if (collection == null || collection.kind() != LibraryItem.Kind.COLLECTION) { status.setText("Refresh and select a saved collection."); return; }
+        runWindow = new CollectionRunWindow(root.getScene().getWindow(), repository, collectionRunner, collectionId, collection.name()); runWindow.show();
+    }
     private void openSelected() { LibraryItem item = selected(); if (item != null && item.kind() == LibraryItem.Kind.REQUEST) openRequest(item.id()); }
     public void openRequest(UUID id) {
         var existing = entries.values().stream().filter(entry -> entry.saved != null && entry.saved.item().id().equals(id)).findFirst();
@@ -455,6 +482,6 @@ public final class LibraryWindowController implements AutoCloseable {
         }));
     }
     @Override public void close() {
-        if (closed) return; closed = true; collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
+        if (closed) return; closed = true; if (runWindow != null) runWindow.close(); if (collectionRunner != null) collectionRunner.close(); collectionSessions.values().forEach(dev.apitestingplatform.application.http.RunVariables::clear); collectionSessions.clear(); environments.close(); autosave.close(); entries.values().forEach(entry -> entry.editor.close()); entries.clear();
     }
 }

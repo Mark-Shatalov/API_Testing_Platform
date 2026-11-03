@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Phases 1–4 (steps 4–13) are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative response assertions and response extraction into temporary variables. Sequential collection execution is the next increment (step 14).
+Steps 4–14 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative response assertions and response extraction into temporary variables and sequential collection execution. Persistent execution history and portable import/export remain later increments (steps 15–16).
 
 ## Module structure
 
@@ -113,7 +113,7 @@ Check results are available for the current response; persistent execution histo
 
 In the upper request editor, open **Extract** (after **Tests**) and choose **Add extraction**. Set **Variable name** to `token` and **Response JSONPath** to `$.access_token` for a response such as `{"access_token":"example-token"}`. Send, then open **Response → Extraction Results** to see EXTRACTED, FAILED, NOT RUN or DISABLED with a reason. In a later request, enter `{{token}}` in Auth → Bearer Token, or another supported template field.
 
-Saved requests in the same collection share a temporary manual session, including requests inside folders. Save both requests in that collection before sending the first one. Unsaved tabs have isolated sessions. Different collections/workspaces do not share extracted values. Use **Clear temporary variables** beside Preview target to clear the current session, or the top toolbar action to clear every session. Restart also discards all values. These manual sessions are a way to exercise data flow before the sequential collection runner in step 14; each future automated run will own a fresh `RunVariables` instance. Sessions are retained across environment changes until explicitly cleared; clear them when switching test targets.
+Saved requests in the same collection share a temporary manual session, including requests inside folders. Save both requests in that collection before sending the first one. Unsaved tabs have isolated sessions. Different collections/workspaces do not share extracted values. Use **Clear temporary variables** beside Preview target to clear the current session, or the top toolbar action to clear every session. Restart also discards all values. Manual sessions are separate from the collection runner; automated iterations use fresh temporary variables. Sessions are retained across environment changes until explicitly cleared; clear them when switching test targets.
 
 Rules have stable IDs and saved order, can be disabled/reordered/removed, and are validated before HTTP traffic (maximum 100). Definitions persist in the encrypted request and recovery payload; old requests default to no rules. Extracted values stay in memory and never enter saved environments or templates. All extracted values are treated as secrets, including values derived from secret inputs. Result summaries and previews mask them, as do assertions on the response that produced them. The raw response viewer and explicit Save Response remain debugging tools showing actual server data.
 
@@ -122,6 +122,22 @@ Only properties, quoted properties, non-negative array indices and array wildcar
 Extraction requires a complete JSON response within 2 MiB, with bounded depth and duplicate-key detection. Network errors, cancellation, malformed/empty/oversized/truncated JSON yield NOT RUN. HTTP error status responses can still contain valid extractable JSON. Each variable is limited to 65,536 characters; a temporary scope has the same 256-variable / 1,048,576-character budget as saved scopes. Failed refreshes remove their previous target instead of reusing a stale token. Independent successful rules still publish together. Session capacity failure publishes no new values and removes the attempted targets. Clearing or updating a session while a request is active prevents its late completion from overwriting newer values.
 
 See [Step 13 implementation and verification](docs/step-13-extraction.md).
+
+## Collection runner
+
+Select a collection (or one of its folders/requests) in the sidebar and click **Run collection…**, beside the library actions. The separate, non-modal window keeps the main editor available. Choose **Iterations** and **Delay (ms)**, then **Start**. Save edits first: only saved request definitions are executed.
+
+Start captures the saved collection order and the workspace's selected environment together on the SQLite worker. Requests follow the tree order: a folder's children run in their saved order at the folder's position among direct collection requests. Later saves, reordering, deletion, environment edits or environment selection changes do not alter the active snapshot. Uploads remain external file references and their bytes are not copied at Start.
+
+Execution is sequential and runs off JavaFX: resolve variables/authentication, validate, send HTTP, evaluate assertions, extract response data, then advance. Each iteration starts with fresh temporary variables; they are shared between requests within that iteration and discarded afterwards. These values never mix with manual Send sessions or saved environments. Precedence stays request > run > selected environment > workspace.
+
+The results table updates as requests complete and shows iteration, request outcome, HTTP status, duration, captured bytes, check counts and extraction counts. Select a row for masked expected/actual check values, extraction outcomes and failure reasons. Request outcomes (SUCCESS, HTTP ERROR, NETWORK ERROR, INVALID REQUEST, CANCELLED, NOT RUN) are separate from assertion and extraction outcomes. A valid response can fail a check while the request remains SUCCESS; HTTP 4xx/5xx responses are HTTP ERROR even when an assertion intentionally expects that status. Ordinary failures are recorded and later requests continue. Overall completion distinguishes COMPLETED, COMPLETED WITH FAILURES, CANCELLED and unexpected FAILED runs.
+
+**Cancel run** cancels active HTTP or interrupts the delay and prevents subsequent requests from starting. Completed rows remain; the interrupted step is CANCELLED and later steps are NOT RUN. Closing the runner or application also cancels the run. Cancellation before snapshot loading finishes sends no requests. A finished/cancelled run can be started again from a fresh snapshot.
+
+Limits: one active collection run, 1–1,000 iterations, 0–60,000 ms between request steps, at most 1,000 total executions and a 32 MiB protected saved-request snapshot budget. There is no delay before the first request or after the last. Progress/results stay in the runner window until replaced by Start or discarded on close; persistent history and report export belong to step 15. Bodies, headers and runtime variable values are not retained in runner result rows.
+
+See [Step 14 implementation and verification](docs/step-14-collection-runner.md).
 
 ## HTTP engine
 

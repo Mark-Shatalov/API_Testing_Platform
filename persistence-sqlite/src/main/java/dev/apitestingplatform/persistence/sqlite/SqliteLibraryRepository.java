@@ -207,10 +207,36 @@ public final class SqliteLibraryRepository implements LibraryRepository {
     @Override public CompletionStage<Void> finishSession() { return submit(() -> {
         execute("DELETE FROM drafts WHERE session_id=?", session.toString()); return null;
     }); }
+    @Override public CompletionStage<dev.apitestingplatform.domain.run.CollectionSnapshot> snapshotCollection(UUID collectionId) {
+        return submit(() -> transaction(() -> {
+            LibraryItem collection = get(collectionId);
+            if (collection.kind() != LibraryItem.Kind.COLLECTION) throw new StorageException("Select a collection to run.");
+            WorkspaceVariables context = readVariables(collection.parentId());
+            List<SavedRequest> requests = new ArrayList<>(); long payloadBudget = 32L * 1024 * 1024;
+            List<UUID> ordered = new ArrayList<>();
+            for (UUID child : siblings(collectionId)) {
+                LibraryItem item = get(child);
+                if (item.kind() == LibraryItem.Kind.FOLDER) ordered.addAll(siblings(child));
+                else if (item.kind() == LibraryItem.Kind.REQUEST) ordered.add(child);
+            }
+            if (ordered.size() > 1000) throw new StorageException("A collection run supports at most 1,000 saved requests.");
+            for (UUID request : ordered) {
+                try (var query = db.prepareStatement("SELECT length(payload_json) FROM requests WHERE id=?")) {
+                    query.setString(1, request.toString()); try (var row = query.executeQuery()) { if (row.next()) payloadBudget -= row.getLong(1); }
+                }
+                if (payloadBudget < 0) throw new StorageException("Collection snapshot exceeds the 32 MiB payload budget. Split it into smaller collections.");
+                requests.add(readRequest(request));
+            }
+            String environmentName = context.environments().stream().filter(value -> value.id().equals(context.selectedEnvironmentId())).map(Environment::name).findFirst().orElse("No environment");
+            return new dev.apitestingplatform.domain.run.CollectionSnapshot(collection.id(), collection.parentId(), collection.name(), context.selectedEnvironmentId(),
+                    environmentName, context.variables(), context.selectedVariables(), requests);
+        }));
+    }
     private void requireWorkspace(UUID id) throws SQLException {
         if (get(id).kind() != LibraryItem.Kind.WORKSPACE) throw new StorageException("Select a valid workspace.");
     }
-    @Override public CompletionStage<WorkspaceVariables> loadVariables(UUID workspaceId) { return submit(() -> {
+    @Override public CompletionStage<WorkspaceVariables> loadVariables(UUID workspaceId) { return submit(() -> readVariables(workspaceId)); }
+    private WorkspaceVariables readVariables(UUID workspaceId) throws Exception {
         requireWorkspace(workspaceId);
         List<Environment> environments = new ArrayList<>();
         try (var query = db.prepareStatement("SELECT id FROM environments WHERE workspace_id=? ORDER BY name COLLATE NOCASE,id")) {
@@ -226,7 +252,7 @@ public final class SqliteLibraryRepository implements LibraryRepository {
                         environments, selected == null ? null : UUID.fromString(selected));
             }
         }
-    }); }
+    }
     @Override public CompletionStage<Void> saveWorkspaceVariables(UUID workspaceId, long expectedVersion, List<Variable> variables) {
         VariableSet snapshot = new VariableSet(variables);
         return submit(() -> {
