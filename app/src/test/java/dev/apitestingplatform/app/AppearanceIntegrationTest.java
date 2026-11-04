@@ -120,7 +120,7 @@ class AppearanceIntegrationTest {
             fx(() -> { controller.setAppearanceAction(() -> themes.showSettings(stage)); stage.show(); return null; });
         }
         Parent root() { return stage.getScene().getRoot(); }
-        void openSettings() { ((Button) root().lookup("#library-appearance")).fire(); }
+        void openSettings() { fireAction(root(), "#library-appearance"); }
         @Override public void close() throws Exception {
             fx(() -> { themes.close(); controller.close(); stage.close(); return null; });
             repository.shutdown().toCompletableFuture().get(5, TimeUnit.SECONDS); preferences.close();

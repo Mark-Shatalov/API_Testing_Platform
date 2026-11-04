@@ -16,7 +16,13 @@ public final class KeyValueEditor extends VBox {
         getStyleClass().add("field-editor");
         TableView<Row> table = new TableView<>(rows);
         table.setId(id + "-table");
-        table.setPlaceholder(new Label("No rows. Add a row; unchecked rows are not sent."));
+        table.setPlaceholder(new EmptyStatePane(switch (id) {
+            case "params" -> "Query parameters are optional";
+            case "headers" -> "No extra headers";
+            case "cookies" -> "No request cookies";
+            default -> "No fields yet";
+        }, id.equals("params") ? "Send the URL as it is, or add parameters such as page = 1."
+                : "Use the Add button to enter a name and value. Uncheck a row to leave it out.").compact());
         TableColumn<Row, Row> enabled = new TableColumn<>("On");
         enabled.setCellValueFactory(cell -> new javafx.beans.property.ReadOnlyObjectWrapper<>(cell.getValue()));
         enabled.setCellFactory(column -> new TableCell<>() {
@@ -31,6 +37,7 @@ public final class KeyValueEditor extends VBox {
             }
         });
         enabled.setPrefWidth(48);
+        enabled.setMinWidth(44); enabled.setMaxWidth(52); enabled.setResizable(false);
         table.getColumns().add(enabled);
         table.getColumns().add(textColumn("Name", row -> row.name, 180));
         table.getColumns().add(textColumn(multipart ? "Value / local file path" : "Value", row -> row.value, 300));
@@ -46,9 +53,22 @@ public final class KeyValueEditor extends VBox {
         error.setPrefWidth(280);
         error.getStyleClass().add("validation-error");
         table.getColumns().add(error);
+        javafx.beans.InvalidationListener updateErrors = ignored -> error.setVisible(rows.stream().anyMatch(row -> !row.error.get().isEmpty()));
+        rows.forEach(row -> row.error.addListener(updateErrors));
+        rows.addListener((javafx.collections.ListChangeListener<Row>) change -> {
+            while (change.next()) {
+                change.getRemoved().forEach(row -> row.error.removeListener(updateErrors));
+                change.getAddedSubList().forEach(row -> row.error.addListener(updateErrors));
+            }
+            updateErrors.invalidated(rows);
+        });
+        updateErrors.invalidated(rows);
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         VBox.setVgrow(table, Priority.ALWAYS);
-        Button add = new Button(multipart ? "Add text part" : "Add row");
+        Button add = new Button(multipart ? "Add text part" : switch (id) {
+            case "params" -> "Add parameter"; case "headers" -> "Add header";
+            case "cookies" -> "Add cookie"; default -> "Add field";
+        });
         add.setId(id + "-add");
         add.setOnAction(event -> { Row row = new Row(); rows.add(row); table.scrollTo(row); });
         add.disableProperty().bind(javafx.beans.binding.Bindings.size(rows).greaterThanOrEqualTo(1000));

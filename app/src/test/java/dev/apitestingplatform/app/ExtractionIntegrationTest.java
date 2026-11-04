@@ -90,7 +90,7 @@ class ExtractionIntegrationTest {
             assertThat(server.takeRequest(5, TimeUnit.SECONDS).getHeader("Authorization")).isEqualTo("Bearer saved-environment"); fixture.waitDone();
             assertThat(await(fixture.repository.loadVariables(fixture.workspace)).selectedVariables().getFirst().value()).isEqualTo("saved-environment");
             assertThat(await(fixture.repository.load(loginId)).draft()).isEqualTo(savedLogin);
-            fixture.open(consumerId); fx(() -> { ((Button) fixture.stage.getScene().getRoot().lookup("#library-clear-temporary")).fire(); return null; });
+            fixture.open(consumerId); fx(() -> { fireAction(fixture.stage.getScene().getRoot(), "#library-clear-temporary"); return null; });
             server.enqueue(new MockResponse().setBody("{}")); fx(() -> { fixture.send(); return null; });
             assertThat(server.takeRequest(5, TimeUnit.SECONDS).getHeader("Authorization")).isEqualTo("Bearer saved-environment"); fixture.waitDone();
         }

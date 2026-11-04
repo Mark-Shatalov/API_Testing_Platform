@@ -87,7 +87,7 @@ class LibraryIntegrationTest {
                     });
                 } catch (Throwable failure) { failed.set(failure); ((Button) pane.lookupButton(ButtonType.CANCEL)).fire(); }
             });
-            ((Button) f.stage.getScene().getRoot().lookup("#library-new-" + kind)).fire(); return null;
+            fireAction(f.stage.getScene().getRoot(), "#library-new-" + kind); return null;
         });
         assertThat(failed.get()).isNull();
         waitFor(() -> libraryTree(f).getSelectionModel().getSelectedItem() != null
@@ -105,7 +105,7 @@ class LibraryIntegrationTest {
                 DialogPane pane = dialog(); explained.set(pane.getHeaderText().equals("No collections in this workspace"));
                 ((Button) pane.lookupButton(ButtonType.CANCEL)).fire();
             });
-            ((Button) f.stage.getScene().getRoot().lookup("#library-new-" + kind)).fire(); return null;
+            fireAction(f.stage.getScene().getRoot(), "#library-new-" + kind); return null;
         });
         assertThat(explained).isTrue(); assertThat(await(f.repository.list())).hasSize(1);
     }
@@ -135,7 +135,7 @@ class LibraryIntegrationTest {
                 DialogPane pane = dialog(); ((TextField) pane.lookup(".text-field")).setText(name);
                 ((Button) pane.lookupButton(ButtonType.OK)).fire();
             });
-            ((Button) f.stage.getScene().getRoot().lookup(id)).fire(); return null;
+            fireAction(f.stage.getScene().getRoot(), id); return null;
         });
     }
 

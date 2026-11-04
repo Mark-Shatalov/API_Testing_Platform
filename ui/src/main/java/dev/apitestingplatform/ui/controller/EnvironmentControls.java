@@ -16,7 +16,7 @@ public final class EnvironmentControls extends VBox implements AutoCloseable {
     private final LibraryRepository repository;
     private final ComboBox<Environment> environments = new ComboBox<>();
     private final Label message = new Label();
-    private final Button create = new Button("New"), edit = new Button("Edit"), delete = new Button("Delete");
+    private final Button create = new Button("New environment"), edit = new Button("Edit"), delete = new Button("Delete");
     private final Button workspaceVariables = new Button("Workspace variables…");
     private WorkspaceVariables snapshot;
     private UUID workspace;
@@ -42,7 +42,14 @@ public final class EnvironmentControls extends VBox implements AutoCloseable {
         workspaceVariables.setId("workspace-variables"); workspaceVariables.setOnAction(event -> editor(null, true));
         message.setId("environment-status"); message.setWrapText(true); message.getStyleClass().add("validation-error");
         message.managedProperty().bind(message.textProperty().isNotEmpty()); message.visibleProperty().bind(message.managedProperty());
-        getChildren().addAll(new Label("ENVIRONMENT"), environments, new HBox(6, create, edit, delete), workspaceVariables, message);
+        Label title = new Label("Environment"); title.getStyleClass().add("navigation-title");
+        environments.setAccessibleText("Environment for requests in this workspace");
+        environments.setTooltip(new Tooltip("Optional. Choose a set of variables such as a base URL or token."));
+        FlowPane actions = new FlowPane(6, 6, create, edit, delete);
+        TitledPane options = new TitledPane("Environment options", new VBox(8, actions, workspaceVariables));
+        options.setId("environment-options"); options.setExpanded(false); options.setAnimated(false);
+        options.getStyleClass().add("disclosure-section");
+        getChildren().addAll(title, environments, options, message);
         setBusy(true);
     }
     private static ListCell<Environment> cell() {

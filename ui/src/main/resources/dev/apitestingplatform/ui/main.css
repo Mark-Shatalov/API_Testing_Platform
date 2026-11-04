@@ -406,7 +406,7 @@
 
 /* Standard controls also participate in the palette, including editors inside tables. */
 .label, .check-box, .radio-button { -fx-text-fill: -app-text; }
-.button, .toggle-button, .combo-box-base, .color-picker {
+.button, .toggle-button, .menu-button, .combo-box-base, .color-picker {
     -fx-background-color: -app-raised;
     -fx-background-radius: 5px;
     -fx-border-color: -app-border;
@@ -414,10 +414,10 @@
     -fx-text-fill: -app-text;
     -fx-cursor: hand;
 }
-.button:hover, .toggle-button:hover, .combo-box-base:hover, .color-picker:hover {
+.button:hover, .toggle-button:hover, .menu-button:hover, .combo-box-base:hover, .color-picker:hover {
     -fx-background-color: derive(-app-raised, 8%);
 }
-.button:focused, .combo-box-base:focused, .color-picker:focused, .text-input:focused {
+.button:focused, .menu-button:focused, .combo-box-base:focused, .color-picker:focused, .text-input:focused {
     -fx-border-color: -app-accent;
 }
 .text-input {
@@ -485,3 +485,30 @@
 .table-cell.assertion-fail { -fx-text-fill: -app-error; -fx-font-weight: bold; }
 .table-cell.assertion-not-run { -fx-text-fill: -app-warning; }
 .table-cell.assertion-disabled { -fx-text-fill: -app-muted; }
+
+/* Workbench hierarchy: common actions stay visible; optional tools disclose on demand. */
+.library-toolbar { -fx-padding: 12px 16px; -fx-spacing: 8px; }
+.workbench-brand { -fx-font-size: 16px; -fx-font-weight: bold; -fx-padding: 0 16px 0 0; }
+.library-toolbar .button, .library-toolbar .menu-button { -fx-min-height: 34px; -fx-padding: 6px 12px; }
+.menu-button > .label { -fx-text-fill: -app-text; }
+.menu-button > .arrow-button > .arrow { -fx-background-color: -app-muted; }
+.library-sidebar { -fx-padding: 16px 12px 12px; -fx-spacing: 10px; }
+.navigation-title { -fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: -app-text; }
+.help-text { -fx-font-size: 12px; -fx-text-fill: -app-muted; -fx-line-spacing: 2px; }
+#library-search { -fx-pref-height: 34px; }
+#library-tree { -fx-background-color: -app-surface; -fx-border-color: -app-border; -fx-background-radius: 5px; -fx-border-radius: 5px; }
+#library-new-collection, #library-add-menu { -fx-min-height: 32px; }
+#environment-controls { -fx-padding: 10px 0 12px; -fx-spacing: 8px; }
+.disclosure-section > .title { -fx-background-color: transparent; -fx-padding: 5px 0; }
+.disclosure-section > .title > .text { -fx-fill: -app-muted; }
+.disclosure-section > .title > .arrow-button .arrow { -fx-background-color: -app-muted; }
+.disclosure-section > .content { -fx-background-color: transparent; -fx-border-color: transparent; -fx-padding: 6px 0 2px; }
+.library-status-bar { -fx-padding: 5px 12px; -fx-background-color: -app-background; -fx-border-color: -app-border; -fx-border-width: 1px 0 0; }
+.library-status-bar .status-bar { -fx-padding: 0; -fx-border-width: 0; -fx-min-height: 20px; }
+.draft-status { -fx-font-size: 11px; -fx-text-fill: -app-muted; }
+.request-starter { -fx-padding: 24px; -fx-alignment: center-left; }
+.starter-title { -fx-font-size: 18px; -fx-font-weight: bold; }
+.request-starter .button { -fx-padding: 6px 10px; }
+.request-toolbar { -fx-padding: 12px 16px; }
+.editor-tabs .tab { -fx-padding: 3px 10px; }
+.target-preview { -fx-padding: 5px 16px 8px; }

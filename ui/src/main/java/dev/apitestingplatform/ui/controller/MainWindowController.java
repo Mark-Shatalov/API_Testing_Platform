@@ -3,6 +3,7 @@ package dev.apitestingplatform.ui.controller;
 import dev.apitestingplatform.ui.MainView;
 import dev.apitestingplatform.application.storage.*;
 import dev.apitestingplatform.domain.run.RunEntry;
+import dev.apitestingplatform.domain.storage.RequestDraft;
 import dev.apitestingplatform.domain.http.ExtractionResult;
 import dev.apitestingplatform.ui.components.RequestToolbar;
 import dev.apitestingplatform.ui.components.RequestEditor;
@@ -83,7 +84,7 @@ public final class MainWindowController implements AutoCloseable {
     public void setManagedDatabase(java.nio.file.Path database) { managedDatabase = database; }
     private RequestExecution active;
     private boolean closed;
-    private final Label target = new Label("Preview the resolved target before sending.");
+    private final Label target = new Label("Check the URL after variables are replaced.");
     private java.util.function.Supplier<CompletionStage<VariableResolver.Context>> variableContext =
             () -> CompletableFuture.completedFuture(VariableResolver.Context.empty());
 
@@ -157,15 +158,42 @@ public final class MainWindowController implements AutoCloseable {
 
         editor = new RequestEditor(draft);
         VBox.setVgrow(editor, Priority.ALWAYS);
-        Button preview = new Button("Preview target"); preview.setId("request-preview-target");
+        Button preview = new Button("Preview URL"); preview.setId("request-preview-target");
+        preview.setTooltip(new javafx.scene.control.Tooltip("Resolve variables without sending a request. Secret values stay masked."));
         preview.setOnAction(event -> prepareRequest(false)); preview.disableProperty().bind(viewModel.operationInProgressProperty());
         target.setId("request-resolved-target"); target.setWrapText(true); HBox.setHgrow(target, Priority.ALWAYS);
         Button clearSession = new Button("Clear temporary variables"); clearSession.setId("request-clear-temporary");
         clearSession.setOnAction(event -> clearTemporaryVariables());
+        clearSession.visibleProperty().bind(javafx.beans.binding.Bindings.createBooleanBinding(
+                () -> editor.getSelectionModel().getSelectedItem() != null
+                        && java.util.Set.of("Variables", "Extract").contains(editor.getSelectionModel().getSelectedItem().getText()),
+                editor.getSelectionModel().selectedItemProperty()));
+        clearSession.managedProperty().bind(clearSession.visibleProperty());
         HBox targetBar = new HBox(10, preview, clearSession, target); targetBar.setAlignment(Pos.CENTER_LEFT); targetBar.getStyleClass().add("target-preview");
+        targetBar.visibleProperty().bind(viewModel.requestUrlProperty().isNotEmpty()); targetBar.managedProperty().bind(targetBar.visibleProperty());
+        Label startTitle = new Label("Start with a request"); startTitle.getStyleClass().add("starter-title");
+        Label startHint = new Label("Enter an API URL above and click Send. No collection or environment is needed to try it.");
+        startHint.setWrapText(true); startHint.getStyleClass().add("help-text");
+        Button sample = new Button("Use a sample GET request"); sample.setId("request-use-sample");
+        sample.setTooltip(new javafx.scene.control.Tooltip("Fill in a public JSONPlaceholder URL. Click Send when you are ready."));
+        sample.setOnAction(event -> {
+            if (!draft.capture().equals(RequestDraft.empty())) return;
+            viewModel.requestUrlProperty().set("https://jsonplaceholder.typicode.com/todos/1");
+            viewModel.showMessage("Sample URL added. Click Send to fetch a public example response.");
+            toolbar.lookup(".url-input").requestFocus();
+        });
+        VBox starter = new VBox(7, startTitle, startHint, sample); starter.setId("request-starter");
+        starter.getStyleClass().add("request-starter");
+        boolean emptyDraft = draft.capture().equals(RequestDraft.empty());
+        starter.visibleProperty().bind(viewModel.requestUrlProperty().isEmpty().and(draft.dirtyProperty().not())
+                .and(new javafx.beans.property.SimpleBooleanProperty(emptyDraft)));
+        starter.managedProperty().bind(starter.visibleProperty());
         historyNotice.setId("request-history-status"); historyNotice.setWrapText(true); historyNotice.visibleProperty().bind(historyNotice.textProperty().isNotEmpty()); historyNotice.managedProperty().bind(historyNotice.visibleProperty());
+        editor.visibleProperty().bind(starter.visibleProperty().not()); editor.managedProperty().bind(editor.visibleProperty());
+        javafx.scene.layout.StackPane configuration = new javafx.scene.layout.StackPane(editor, starter);
+        VBox.setVgrow(configuration, Priority.ALWAYS);
         VBox requestEditor = new VBox(toolbar, targetBar, historyNotice, RequestEditor.error(draft.urlError, "request-url-error"),
-                RequestEditor.error(draft.summary, "request-validation-summary"), editor);
+                RequestEditor.error(draft.summary, "request-validation-summary"), configuration);
         requestEditor.setMinHeight(260);
         requestEditor.getStyleClass().add("request-editor");
 
@@ -206,7 +234,7 @@ public final class MainWindowController implements AutoCloseable {
             currentHistory = new RequestHistory(historyService, historyContext.get()); currentHistory.begin(); historyNotice.setText("History recording started.");
         }
         var snapshot = draft.snapshot();
-        if (snapshot.isEmpty()) { saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Request validation failed."); viewModel.showMessage(draft.summary.get()); return; }
+        if (snapshot.isEmpty()) { editor.revealFirstError(); saveHistorySimple(RunEntry.Outcome.INVALID_REQUEST, "Request validation failed."); viewModel.showMessage(draft.summary.get()); return; }
         RequestConfiguration configuration = snapshot.orElseThrow();
         var localVariables = draft.variables.stream().map(RequestEditorViewModel.VariableRow::snapshot).toList();
         var authentication = draft.authentication();
@@ -250,7 +278,7 @@ public final class MainWindowController implements AutoCloseable {
                     pendingValidation = null;
                     if (!issues.isEmpty()) {
                         target.setText("Target unavailable — fix the marked fields.");
-                        if (draft.revision() == revision) draft.showIssues(issues);
+                        if (draft.revision() == revision) { draft.showIssues(issues); editor.revealFirstError(); }
                         if (send) saveHistory(currentHistory, RunEntry.Outcome.INVALID_REQUEST, 0, 0, 0, historyNotRun(assertions, prepared == null ? SecretRedactor.empty() : prepared.redactor()), ExtractionEngine.notRun(extractions, SecretRedactor.empty(), "Request was not sent.").results(), "Request validation failed.", prepared == null ? SecretRedactor.empty() : prepared.redactor());
                         viewModel.finishOperation("Request not sent: validation failed."
                                 + (draft.revision() != revision ? " The editor has newer unsent edits." : " See the marked fields."));

@@ -139,7 +139,7 @@ class HistoryTransferIntegrationTest {
 
     @Test void exportDialogStartsWithSecretInclusionOffAndCanBeCancelledBeforeFileSelection() throws Exception {
         try (Fixture fixture = new Fixture()) {
-            fx(() -> { Platform.runLater(() -> ((Button) fixture.stage.getScene().getRoot().lookup("#library-export-workspace")).fire()); return null; });
+            fx(() -> { Platform.runLater(() -> fireAction(fixture.stage.getScene().getRoot(), "#library-export-workspace")); return null; });
             waitFor(() -> dialog() != null && dialog().lookup("#transfer-include-secrets") != null);
             fx(() -> { assertThat(((CheckBox) dialog().lookup("#transfer-include-secrets")).isSelected()).isFalse(); AppearanceIntegrationTest.snapshot(dialog(), "export-options"); ((Button) dialog().lookupButton(ButtonType.CANCEL)).fire(); return null; });
             assertThat(fixture.server.getRequestCount()).isZero();

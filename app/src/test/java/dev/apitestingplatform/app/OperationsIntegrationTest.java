@@ -20,10 +20,11 @@ class OperationsIntegrationTest {
     @BeforeAll static void toolkit() throws Exception { FxTestSupport.start(); }
     @Test @SuppressWarnings("unchecked") void settingsSaveSurvivesReopenAndErrorsPreserveDirtyEditor() throws Exception {
         try (var fixture = new Fixture()) {
-            waitFor(() -> fixture.controller.activeEditor() != null);
+            waitFor(() -> fixture.controller.activeEditor() != null
+                    && fixture.stage.getScene().getRoot().lookup(".url-input") != null);
             fx(() -> {
                 ((TextField) fixture.stage.getScene().getRoot().lookup(".url-input")).setText("https://example.com/unsaved");
-                ((Button) fixture.stage.getScene().getRoot().lookup("#library-settings")).fire(); return null;
+                fireAction(fixture.stage.getScene().getRoot(), "#library-settings"); return null;
             });
             waitFor(() -> settings().lookup("#operations-database") instanceof TextField field && !field.getText().isEmpty());
             fx(() -> {

@@ -9,6 +9,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 
@@ -23,9 +24,12 @@ public final class RequestToolbar extends HBox {
         methodSelector.valueProperty().bindBidirectional(viewModel.requestMethodProperty());
         methodSelector.setPrefWidth(112);
         methodSelector.getStyleClass().add("method-selector");
+        methodSelector.setAccessibleText("HTTP method");
+        methodSelector.setTooltip(new Tooltip("GET reads data. Use POST or PUT when sending a request body."));
 
         TextField urlInput = new TextField();
-        urlInput.setPromptText("Enter request URL, for example https://api.example.com/users");
+        urlInput.setPromptText("Enter a URL, e.g. https://api.example.com/users");
+        urlInput.setAccessibleText("Request URL");
         urlInput.textProperty().bindBidirectional(viewModel.requestUrlProperty());
         urlInput.getStyleClass().add("url-input");
         HBox.setHgrow(urlInput, Priority.ALWAYS);
@@ -44,12 +48,15 @@ public final class RequestToolbar extends HBox {
                 viewModel.requestUrlProperty(),
                 viewModel.operationInProgressProperty()));
         sendButton.getStyleClass().add("send-button");
+        sendButton.setTooltip(new Tooltip("Send this request and view the response below"));
 
         Button cancelButton = new Button("Cancel");
         cancelButton.setCancelButton(true);
         cancelButton.setOnAction(event -> cancelAction.run());
         cancelButton.disableProperty().bind(viewModel.operationInProgressProperty().not());
         cancelButton.getStyleClass().add("cancel-button");
+        cancelButton.visibleProperty().bind(viewModel.operationInProgressProperty());
+        cancelButton.managedProperty().bind(cancelButton.visibleProperty());
 
         setAlignment(Pos.CENTER_LEFT);
         setSpacing(10);

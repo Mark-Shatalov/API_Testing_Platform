@@ -204,7 +204,7 @@ class ResponseDebuggingIntegrationTest {
             fx(() -> {
                 TabPane tabs = (TabPane) f.stage.getScene().getRoot().lookup("#request-editor-tabs");
                 assertThat(tabs.getTabs()).extracting(javafx.scene.control.Tab::getText)
-                        .containsExactly("Params", "Headers", "Cookies", "Auth", "Body", "Settings", "Variables", "Tests", "Extract");
+                        .containsExactly("Params", "Body", "Auth", "Headers", "Tests", "Variables", "Extract", "Cookies", "Settings");
                 for (var tab : tabs.getTabs()) { tabs.getSelectionModel().select(tab); f.stage.getScene().getRoot().applyCss(); }
                 f.stage.setWidth(960); f.stage.setHeight(700); f.stage.getScene().getRoot().layout();
                 assertThat(tabs.getWidth()).isPositive();

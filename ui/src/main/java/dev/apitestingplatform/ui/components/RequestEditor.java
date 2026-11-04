@@ -26,23 +26,52 @@ public final class RequestEditor extends TabPane implements AutoCloseable {
         setTabClosingPolicy(TabClosingPolicy.UNAVAILABLE);
         getStyleClass().add("editor-tabs");
         getTabs().addAll(lazy("Params", () -> new KeyValueEditor("params", draft.params, false)),
-                lazy("Headers", () -> new KeyValueEditor("headers", draft.headers, false)),
-                lazy("Cookies", () -> new KeyValueEditor("cookies", draft.cookies, false)),
+                lazy("Body", this::body),
                 lazy("Auth", () -> new AuthenticationEditor(draft)),
-                lazy("Body", this::body), lazy("Settings", this::settings),
+                lazy("Headers", () -> new KeyValueEditor("headers", draft.headers, false)),
+                lazy("Tests", () -> new AssertionEditor(draft)),
                 lazy("Variables", () -> new VBox(error(draft.variableError, "request-variable-error"), new VariableEditor(draft.variables))),
-                lazy("Tests", () -> new AssertionEditor(draft)), lazy("Extract", () -> new ExtractionEditor(draft)));
+                lazy("Extract", () -> new ExtractionEditor(draft)),
+                lazy("Cookies", () -> new KeyValueEditor("cookies", draft.cookies, false)), lazy("Settings", this::settings));
         getSelectionModel().selectedItemProperty().addListener((observable, before, selected) -> initialize(selected));
         initialize(getSelectionModel().getSelectedItem());
     }
 
     private static Tab lazy(String name, java.util.function.Supplier<javafx.scene.Node> view) {
-        Tab tab = new Tab(name); tab.setUserData(view); return tab;
+        Tab tab = new Tab(name); tab.setUserData(view);
+        tab.setTooltip(new Tooltip(switch (name) {
+            case "Params" -> "Optional query parameters added to the URL";
+            case "Body" -> "Data to send, such as JSON, text or files";
+            case "Auth" -> "Authentication: Bearer token, Basic Auth or API key";
+            case "Headers" -> "Extra HTTP headers, such as Accept or Content-Type";
+            case "Tests" -> "Checks to run on the response, such as status equals 200";
+            case "Variables" -> "Values available only to this request, used as {{name}}";
+            case "Extract" -> "Save response values for later requests in a workflow";
+            case "Cookies" -> "Cookies sent with this request";
+            default -> "Timeout, redirects and HTTP version for this request";
+        }));
+        return tab;
     }
     @SuppressWarnings("unchecked") private void initialize(Tab tab) {
         if (tab != null && tab.getContent() == null && tab.getUserData() instanceof java.util.function.Supplier<?> factory) {
             tab.setContent(((java.util.function.Supplier<javafx.scene.Node>) factory).get()); tab.setUserData(null);
         }
+    }
+    /** Bring the first invalid section into view instead of leaving its error behind another tab. */
+    public void revealFirstError() {
+        String name = !draft.timeoutError.get().isEmpty() ? "Settings"
+                : !draft.authError.get().isEmpty() ? "Auth"
+                : !draft.variableError.get().isEmpty() ? "Variables"
+                : !draft.testsError.get().isEmpty() ? "Tests"
+                : !draft.extractionsError.get().isEmpty() ? "Extract"
+                : !draft.bodyError.get().isEmpty() || invalid(draft.form) || invalid(draft.multipart) ? "Body"
+                : invalid(draft.params) ? "Params" : invalid(draft.headers) ? "Headers"
+                : invalid(draft.cookies) ? "Cookies" : null;
+        if (name != null) getTabs().stream().filter(tab -> tab.getText().equals(name)).findFirst()
+                .ifPresent(tab -> getSelectionModel().select(tab));
+    }
+    private static boolean invalid(java.util.List<RequestEditorViewModel.Row> rows) {
+        return rows.stream().anyMatch(row -> !row.error.get().isEmpty());
     }
     private VBox body() {
         ComboBox<RequestBody.Type> mode = new ComboBox<>(FXCollections.observableArrayList(RequestBody.Type.values()));

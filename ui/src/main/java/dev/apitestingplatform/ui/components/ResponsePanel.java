@@ -38,7 +38,8 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     private CodeArea content;
     private java.nio.file.Path managedDatabase;
     public void setManagedDatabase(java.nio.file.Path database) { managedDatabase = database; }
-    private final StackPane bodyHost = new StackPane(new Label("Send a request to inspect its response."));
+    private final StackPane bodyHost = new StackPane(new EmptyStatePane("Your response will appear here",
+            "Click Send above to see the status, response body and headers."));
     private final Button copyBody = new Button("Copy selection");
     private final ComboBox<Mode> mode = new ComboBox<>();
     private final TextField query = new TextField();
@@ -165,6 +166,8 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         searchBar.setAlignment(Pos.CENTER_LEFT);
         actions.getStyleClass().add("response-actions");
         searchBar.getStyleClass().add("response-search-bar");
+        actions.visibleProperty().bind(ready); actions.managedProperty().bind(actions.visibleProperty());
+        searchBar.visibleProperty().bind(ready); searchBar.managedProperty().bind(searchBar.visibleProperty());
         VBox.setVgrow(bodyHost, Priority.ALWAYS);
         detail.setWrapText(true);
         detail.getStyleClass().add("response-detail");
@@ -175,6 +178,8 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
         pages.setAlignment(Pos.CENTER_LEFT);
         previousPage.setDisable(true);
         nextPage.setDisable(true);
+        pages.visibleProperty().bind(ready.and(previousPage.disableProperty().not().or(nextPage.disableProperty().not())));
+        pages.managedProperty().bind(pages.visibleProperty());
         return new VBox(actions, searchBar, detail, bodyHost, pages);
     }
 
