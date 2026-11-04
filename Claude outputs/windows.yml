@@ -1,0 +1,83 @@
+name: Windows build and installer
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Maven Wrapper verify
+        shell: pwsh
+        run: .\mvnw.cmd -B --no-transfer-progress clean verify
+      - name: Keep test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/*.xml'
+          if-no-files-found: ignore
+
+  # A hosted runner is a clean Windows image without the application installed: it builds the MSI,
+  # then installs, upgrades, launches and uninstalls it with packaging\windows\Test-Installer.ps1.
+  installer:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install WiX Toolset 5.0.2
+        shell: powershell
+        run: .\packaging\windows\Install-WixToolset.ps1
+      - name: Build release installer
+        shell: powershell
+        run: .\packaging\windows\Build-Installer.ps1 -SkipTests
+      - name: Build synthetic next patch for the upgrade test
+        id: next
+        shell: powershell
+        run: |
+          . .\packaging\windows\Common.ps1
+          $settings = Get-InstallerSettings (Get-Location).Path
+          $current = ConvertTo-InstallerVersion $settings.ProjectVersion
+          $parts = $current -split '\.'
+          $next = '{0}.{1}.{2}' -f $parts[0], $parts[1], ([int]$parts[2] + 1)
+          .\packaging\windows\Build-Installer.ps1 -SkipMavenBuild -SkipSmokeTest -AppVersion $next -Destination upgrade-test
+          "current=$current" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "next=$next" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Validate install, upgrade, downgrade refusal and uninstall
+        shell: powershell
+        run: >
+          .\packaging\windows\Test-Installer.ps1
+          -Msi "dist\API Testing Platform-${{ steps.next.outputs.current }}.msi"
+          -UpgradeMsi "upgrade-test\API Testing Platform-${{ steps.next.outputs.next }}.msi"
+          -LogDirectory installer-validation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-installer
+          path: |
+            dist/*.msi
+            dist/SHA256SUMS.txt
+            dist/*.build-info.json
+            installer-validation/**

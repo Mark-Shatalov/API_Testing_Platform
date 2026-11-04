@@ -12,11 +12,54 @@
     <packaging>pom</packaging>
     <name>API Testing Platform - Windows Packaging</name>
 
+    <!--
+        Installer metadata. packaging/windows/Build-Installer.ps1 reads these values, so this file is the
+        single source of truth. Never change installer.upgradeUuid: Windows Installer uses it to recognise
+        older versions and replace them in place during an upgrade.
+    -->
     <properties>
         <installer.name>API Testing Platform</installer.name>
         <installer.type>msi</installer.type>
         <installer.vendor>API Testing Platform</installer.vendor>
+        <installer.description>Local desktop application for testing HTTP APIs</installer.description>
+        <installer.copyright>Copyright (c) 2026 API Testing Platform contributors</installer.copyright>
+        <installer.upgradeUuid>74c383b2-1e8b-4a5e-8d88-e2eaae645a1b</installer.upgradeUuid>
+        <installer.mainModule>dev.apitestingplatform.app/dev.apitestingplatform.app.Main</installer.mainModule>
+        <installer.javaOptions>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna</installer.javaOptions>
         <installer.destination>${project.parent.basedir}/dist</installer.destination>
+        <installer.modules>${project.build.directory}/jpackage/modules</installer.modules>
     </properties>
-</project>
 
+    <dependencies>
+        <!-- Depending on app orders this module last in the reactor and brings in the complete runtime graph. -->
+        <dependency>
+            <groupId>dev.apitestingplatform</groupId>
+            <artifactId>app</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <!-- The exact jars jpackage puts on the installed application's module path. -->
+                        <id>copy-runtime-modules</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${installer.modules}</outputDirectory>
+                            <overWriteReleases>true</overWriteReleases>
+                            <overWriteSnapshots>true</overWriteSnapshots>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

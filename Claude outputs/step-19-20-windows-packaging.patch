@@ -1,0 +1,2559 @@
+From b69a3cd1d33ac76eea22e0c62faaa03e190f12cf Mon Sep 17 00:00:00 2001
+From: Michael Babych <michaelbabych8@gmail.com>
+Date: Wed, 4 Nov 2026 15:55:54 +0000
+Subject: [PATCH] Add Windows packaging and release validation (steps 19-20)
+
+- Main entry point keeps JavaFX/JNA/SQLite native caches under %LOCALAPPDATA%
+- Explicit "Remove API Testing Platform Data" launcher with confirmation
+- packaging module copies the runtime module path; jlink + jpackage MSI build
+- Smoke, installer lifecycle, sandbox and one-command release validation scripts
+- Windows CI workflow, release instructions and installer validation checklist
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LYtH2HwZUUYKBxnJmVLCoU
+---
+ .github/workflows/windows.yml                 |  83 ++++++++
+ README.md                                     |  15 +-
+ app/pom.xml                                   |   3 +-
+ .../java/dev/apitestingplatform/app/Main.java |  30 +++
+ .../app/RuntimeLocations.java                 |  73 +++++++
+ .../app/UserDataRemoval.java                  |  87 +++++++++
+ .../app/UserDataRemovalApplication.java       |  71 +++++++
+ .../app/RuntimeLocationsTest.java             |  56 ++++++
+ .../app/UserDataRemovalTest.java              |  86 ++++++++
+ docs/release-checklist.md                     |  80 ++++++++
+ docs/step-19-packaging.md                     |  50 +++++
+ docs/step-20-release-validation.md            |  50 +++++
+ packaging/README.md                           |  48 ++++-
+ packaging/pom.xml                             |  45 ++++-
+ packaging/windows/Build-Installer.ps1         | 184 ++++++++++++++++++
+ packaging/windows/Common.ps1                  | 133 +++++++++++++
+ packaging/windows/Install-WixToolset.ps1      |  27 +++
+ .../windows/Invoke-ReleaseValidation.ps1      | 164 ++++++++++++++++
+ packaging/windows/Start-SandboxValidation.ps1 |  45 +++++
+ packaging/windows/Test-AppImage.ps1           | 114 +++++++++++
+ packaging/windows/Test-Installer.ps1          | 172 ++++++++++++++++
+ packaging/windows/app.ico                     | Bin 0 -> 34196 bytes
+ packaging/windows/runtime-modules.txt         |  25 +++
+ pom.xml                                       |  11 ++
+ 24 files changed, 1645 insertions(+), 7 deletions(-)
+ create mode 100644 .github/workflows/windows.yml
+ create mode 100644 app/src/main/java/dev/apitestingplatform/app/Main.java
+ create mode 100644 app/src/main/java/dev/apitestingplatform/app/RuntimeLocations.java
+ create mode 100644 app/src/main/java/dev/apitestingplatform/app/UserDataRemoval.java
+ create mode 100644 app/src/main/java/dev/apitestingplatform/app/UserDataRemovalApplication.java
+ create mode 100644 app/src/test/java/dev/apitestingplatform/app/RuntimeLocationsTest.java
+ create mode 100644 app/src/test/java/dev/apitestingplatform/app/UserDataRemovalTest.java
+ create mode 100644 docs/release-checklist.md
+ create mode 100644 docs/step-19-packaging.md
+ create mode 100644 docs/step-20-release-validation.md
+ create mode 100644 packaging/windows/Build-Installer.ps1
+ create mode 100644 packaging/windows/Common.ps1
+ create mode 100644 packaging/windows/Install-WixToolset.ps1
+ create mode 100644 packaging/windows/Invoke-ReleaseValidation.ps1
+ create mode 100644 packaging/windows/Start-SandboxValidation.ps1
+ create mode 100644 packaging/windows/Test-AppImage.ps1
+ create mode 100644 packaging/windows/Test-Installer.ps1
+ create mode 100644 packaging/windows/app.ico
+ create mode 100644 packaging/windows/runtime-modules.txt
+
+diff --git a/.github/workflows/windows.yml b/.github/workflows/windows.yml
+new file mode 100644
+index 0000000..4886ad1
+--- /dev/null
++++ b/.github/workflows/windows.yml
+@@ -0,0 +1,83 @@
++name: Windows build and installer
++
++on:
++  push:
++    branches: [master]
++    tags: ['v*']
++  pull_request:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  verify:
++    runs-on: windows-2022
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: '25'
++          cache: maven
++      - name: Maven Wrapper verify
++        shell: pwsh
++        run: .\mvnw.cmd -B --no-transfer-progress clean verify
++      - name: Keep test reports
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: surefire-reports
++          path: '**/target/surefire-reports/*.xml'
++          if-no-files-found: ignore
++
++  # A hosted runner is a clean Windows image without the application installed: it builds the MSI,
++  # then installs, upgrades, launches and uninstalls it with packaging\windows\Test-Installer.ps1.
++  installer:
++    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
++    needs: verify
++    runs-on: windows-2022
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: '25'
++          cache: maven
++      - uses: actions/setup-dotnet@v4
++        with:
++          dotnet-version: '8.0.x'
++      - name: Install WiX Toolset 5.0.2
++        shell: powershell
++        run: .\packaging\windows\Install-WixToolset.ps1
++      - name: Build release installer
++        shell: powershell
++        run: .\packaging\windows\Build-Installer.ps1 -SkipTests
++      - name: Build synthetic next patch for the upgrade test
++        id: next
++        shell: powershell
++        run: |
++          . .\packaging\windows\Common.ps1
++          $settings = Get-InstallerSettings (Get-Location).Path
++          $current = ConvertTo-InstallerVersion $settings.ProjectVersion
++          $parts = $current -split '\.'
++          $next = '{0}.{1}.{2}' -f $parts[0], $parts[1], ([int]$parts[2] + 1)
++          .\packaging\windows\Build-Installer.ps1 -SkipMavenBuild -SkipSmokeTest -AppVersion $next -Destination upgrade-test
++          "current=$current" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
++          "next=$next" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
++      - name: Validate install, upgrade, downgrade refusal and uninstall
++        shell: powershell
++        run: >
++          .\packaging\windows\Test-Installer.ps1
++          -Msi "dist\API Testing Platform-${{ steps.next.outputs.current }}.msi"
++          -UpgradeMsi "upgrade-test\API Testing Platform-${{ steps.next.outputs.next }}.msi"
++          -LogDirectory installer-validation
++      - uses: actions/upload-artifact@v4
++        if: always()
++        with:
++          name: windows-installer
++          path: |
++            dist/*.msi
++            dist/SHA256SUMS.txt
++            dist/*.build-info.json
++            installer-validation/**
+diff --git a/README.md b/README.md
+index f205088..9585a4a 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
+ 
+-Steps 4–18 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports, portable workspace import/export, operational settings, database backup/restore and safe diagnostics. Performance and failure recovery have measured workloads. Windows installation and release delivery remain steps 19–20.
++Steps 4–18 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports, portable workspace import/export, operational settings, database backup/restore and safe diagnostics. Performance and failure recovery have measured workloads. Step 19 packages the app as a Windows MSI with a bundled Java runtime; step 20 provides the release validation run.
+ 
+ ## Module structure
+ 
+@@ -43,7 +43,18 @@ Install the reactor artifacts locally, then launch the `app` module:
+ .\mvnw.cmd -f app\pom.xml javafx:run
+ ```
+ 
+-The development build requires Java 25. A future packaging increment will use `jlink` and `jpackage` so installed users do not need a separate Java installation.
++The development build requires Java 25. `javafx:run` uses the same entry point as the installed launcher (`dev.apitestingplatform.app.Main`).
++
++## Install on Windows
++
++The MSI from `packaging\windows\Build-Installer.ps1` installs into `C:\Program Files\API Testing Platform` with its own Java 25 runtime; no JDK, JRE, server or service is needed on the user's computer. Data, backups, logs, settings and native-library caches stay in `%LOCALAPPDATA%\API Testing Platform`, outside the installation folder. Installing a newer version upgrades in place and keeps that data; uninstalling also keeps it. To delete it, run **Start → API Testing Platform → Remove API Testing Platform Data** and confirm.
++
++```powershell
++.\packaging\windows\Install-WixToolset.ps1      # once per build machine (.NET 8 SDK required)
++.\packaging\windows\Build-Installer.ps1         # dist\API Testing Platform-<version>.msi
++```
++
++Building, release steps and the installer validation checklist: [packaging/README.md](packaging/README.md), [release checklist](docs/release-checklist.md), [Step 19 packaging](docs/step-19-packaging.md) and [Step 20 release validation](docs/step-20-release-validation.md).
+ 
+ ## Finding your way around
+ 
+diff --git a/app/pom.xml b/app/pom.xml
+index a61c88f..77cf326 100644
+--- a/app/pom.xml
++++ b/app/pom.xml
+@@ -61,7 +61,8 @@
+                 <groupId>org.openjfx</groupId>
+                 <artifactId>javafx-maven-plugin</artifactId>
+                 <configuration>
+-                    <mainClass>dev.apitestingplatform.app/dev.apitestingplatform.app.ApiTestingPlatformApplication</mainClass>
++                    <!-- Same entry point as the installed launcher: native caches go below %LOCALAPPDATA%. -->
++                    <mainClass>dev.apitestingplatform.app/dev.apitestingplatform.app.Main</mainClass>
+                     <options>
+                         <option>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna</option>
+                     </options>
+diff --git a/app/src/main/java/dev/apitestingplatform/app/Main.java b/app/src/main/java/dev/apitestingplatform/app/Main.java
+new file mode 100644
+index 0000000..834a852
+--- /dev/null
++++ b/app/src/main/java/dev/apitestingplatform/app/Main.java
+@@ -0,0 +1,30 @@
++package dev.apitestingplatform.app;
++
++import dev.apitestingplatform.persistence.sqlite.DataDirectory;
++import javafx.application.Application;
++
++import java.nio.file.Path;
++import java.util.Arrays;
++
++/**
++ * Entry point used by the installed launchers and {@code javafx:run}.
++ * It runs before any JavaFX, JNA or SQLite native library is loaded, so their extraction caches can be
++ * redirected from the user profile root and the system temporary folder into the per-user data directory.
++ */
++public final class Main {
++    private Main() { }
++
++    public static void main(String[] args) {
++        if (Arrays.asList(args).contains(UserDataRemoval.ARGUMENT)) {
++            // Removal must not load native caches from the directory it is about to delete.
++            RuntimeLocations.configureTemporary(Path.of(System.getProperty("java.io.tmpdir")));
++            Application.launch(UserDataRemovalApplication.class);
++            return;
++        }
++        Path data = null;
++        try { data = DataDirectory.database().getParent(); }
++        catch (IllegalStateException unavailable) { /* The application reports missing LOCALAPPDATA during startup. */ }
++        if (data != null) RuntimeLocations.configure(data, RuntimeLocations.applicationVersion());
++        Application.launch(ApiTestingPlatformApplication.class, args);
++    }
++}
+diff --git a/app/src/main/java/dev/apitestingplatform/app/RuntimeLocations.java b/app/src/main/java/dev/apitestingplatform/app/RuntimeLocations.java
+new file mode 100644
+index 0000000..e2bfa5d
+--- /dev/null
++++ b/app/src/main/java/dev/apitestingplatform/app/RuntimeLocations.java
+@@ -0,0 +1,73 @@
++package dev.apitestingplatform.app;
++
++import java.io.IOException;
++import java.io.UncheckedIOException;
++import java.nio.file.*;
++import java.util.Comparator;
++import java.util.Map;
++import java.util.regex.Pattern;
++import java.util.stream.Stream;
++
++/**
++ * Native-library extraction caches. JavaFX would otherwise use {@code %USERPROFILE%\.openjfx}, while JNA and
++ * SQLite use the system temporary folder. Installed builds keep them below
++ * {@code %LOCALAPPDATA%\API Testing Platform\cache\<version>}, never in the installation directory.
++ */
++final class RuntimeLocations {
++    static final String CACHE = "cache";
++    private static final Pattern SAFE_VERSION = Pattern.compile("[0-9A-Za-z][0-9A-Za-z._-]{0,63}");
++    private static final Map<String, String> PROPERTIES = Map.of(
++            "javafx.cachedir", "openjfx",
++            "jna.tmpdir", "jna",
++            "org.sqlite.tmpdir", "sqlite");
++
++    private RuntimeLocations() { }
++
++    /** jpackage writes {@code jpackage.app-version}; development runs share one "dev" cache. */
++    static String applicationVersion() {
++        String version = System.getProperty("jpackage.app-version", "dev");
++        return SAFE_VERSION.matcher(version).matches() ? version : "dev";
++    }
++
++    static Path cacheRoot(Path dataDirectory, String version) {
++        return dataDirectory.resolve(CACHE).resolve(version);
++    }
++
++    /** Sets only properties the user has not overridden, creates the folders and removes caches of older versions. */
++    static void configure(Path dataDirectory, String version) {
++        Path root = cacheRoot(dataDirectory, version);
++        assign(root);
++        removeOtherVersions(dataDirectory.resolve(CACHE), version);
++    }
++
++    static void configureTemporary(Path temporaryDirectory) {
++        assign(temporaryDirectory.resolve("api-testing-platform-maintenance"));
++    }
++
++    private static void assign(Path root) {
++        PROPERTIES.forEach((property, folder) -> {
++            if (System.getProperty(property) != null) return;
++            Path target = root.resolve(folder);
++            try { Files.createDirectories(target); System.setProperty(property, target.toString()); }
++            catch (IOException | SecurityException unavailable) { /* Library defaults remain usable. */ }
++        });
++    }
++
++    /** Best effort: a library still loaded by another running version stays locked and is skipped. */
++    static void removeOtherVersions(Path caches, String current) {
++        if (!Files.isDirectory(caches, LinkOption.NOFOLLOW_LINKS)) return;
++        try (Stream<Path> versions = Files.list(caches)) {
++            versions.filter(path -> !path.getFileName().toString().equals(current))
++                    .filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
++                    .forEach(RuntimeLocations::deleteQuietly);
++        } catch (IOException ignored) { /* Cache cleanup never blocks startup. */ }
++    }
++
++    private static void deleteQuietly(Path directory) {
++        try (Stream<Path> tree = Files.walk(directory)) {
++            tree.sorted(Comparator.reverseOrder()).forEach(path -> {
++                try { Files.deleteIfExists(path); } catch (IOException ignored) { }
++            });
++        } catch (IOException | UncheckedIOException ignored) { }
++    }
++}
+diff --git a/app/src/main/java/dev/apitestingplatform/app/UserDataRemoval.java b/app/src/main/java/dev/apitestingplatform/app/UserDataRemoval.java
+new file mode 100644
+index 0000000..379a196
+--- /dev/null
++++ b/app/src/main/java/dev/apitestingplatform/app/UserDataRemoval.java
+@@ -0,0 +1,87 @@
++package dev.apitestingplatform.app;
++
++import java.io.IOException;
++import java.nio.channels.FileChannel;
++import java.nio.channels.FileLock;
++import java.nio.channels.OverlappingFileLockException;
++import java.nio.file.*;
++import java.nio.file.attribute.BasicFileAttributes;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.stream.Stream;
++
++/**
++ * Explicit, user-requested removal of this Windows user's local data. Uninstalling never calls this:
++ * the installer leaves {@code %LOCALAPPDATA%\API Testing Platform} untouched unless the user runs the
++ * separate "Remove API Testing Platform Data" shortcut and confirms.
++ */
++final class UserDataRemoval {
++    static final String ARGUMENT = "--remove-user-data";
++    static final String FOLDER = "API Testing Platform";
++    private static final String LOCK = "platform.sqlite.lock";
++
++    enum Outcome { REMOVED, NOTHING_TO_REMOVE, IN_USE, REFUSED, INCOMPLETE }
++    record Result(Outcome outcome, Path directory, int remainingEntries) { }
++
++    private UserDataRemoval() { }
++
++    /**
++     * Deletes {@code localAppData\API Testing Platform} completely. Refuses any other location, refuses while
++     * the application holds its single-instance lock, and never follows links or junctions out of the folder.
++     */
++    static Result remove(Path localAppData, Path dataDirectory) {
++        Path base = localAppData.toAbsolutePath().normalize();
++        Path directory = dataDirectory.toAbsolutePath().normalize();
++        if (directory.getParent() == null || !directory.getParent().equals(base) || !directory.getFileName().toString().equals(FOLDER))
++            return new Result(Outcome.REFUSED, directory, 0);
++        if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) return new Result(Outcome.NOTHING_TO_REMOVE, directory, 0);
++        BasicFileAttributes root;
++        try { root = Files.readAttributes(directory, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
++        catch (IOException unreadable) { return new Result(Outcome.INCOMPLETE, directory, 1); }
++        if (!isPlainDirectory(root)) return new Result(Outcome.REFUSED, directory, 0);
++
++        Path lockPath = directory.resolve(LOCK);
++        List<Path> failures = new ArrayList<>();
++        try (FileChannel channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
++            final FileLock lock = tryLock(channel);
++            if (lock == null) return new Result(Outcome.IN_USE, directory, 0);
++            try (lock) { deleteChildren(directory, lockPath, failures); }
++        } catch (IOException lockUnavailable) {
++            return new Result(Outcome.IN_USE, directory, 0);
++        }
++        deleteEntry(lockPath, failures);
++        if (failures.isEmpty()) deleteEntry(directory, failures);
++        return failures.isEmpty() ? new Result(Outcome.REMOVED, directory, 0) : new Result(Outcome.INCOMPLETE, directory, failures.size());
++    }
++
++    private static FileLock tryLock(FileChannel channel) throws IOException {
++        try { return channel.tryLock(); } catch (OverlappingFileLockException sameProcess) { return null; }
++    }
++
++    private static void deleteChildren(Path directory, Path keep, List<Path> failures) {
++        try (Stream<Path> children = Files.list(directory)) {
++            for (Path child : children.toList()) {
++                if (child.equals(keep)) continue;
++                deleteTree(child, failures);
++            }
++        } catch (IOException unreadable) { failures.add(directory); }
++    }
++
++    private static void deleteTree(Path path, List<Path> failures) {
++        try {
++            BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
++            // A link or NTFS junction is removed itself; its target outside the data folder is never visited.
++            if (isPlainDirectory(attributes)) deleteChildren(path, null, failures);
++        } catch (IOException unreadable) { failures.add(path); return; }
++        deleteEntry(path, failures);
++    }
++
++    private static void deleteEntry(Path path, List<Path> failures) {
++        try { Files.deleteIfExists(path); } catch (IOException locked) { failures.add(path); }
++    }
++
++    /** On Windows a junction reports {@code isDirectory() && isOther()}; only ordinary folders are descended. */
++    private static boolean isPlainDirectory(BasicFileAttributes attributes) {
++        return attributes.isDirectory() && !attributes.isSymbolicLink() && !attributes.isOther();
++    }
++}
+diff --git a/app/src/main/java/dev/apitestingplatform/app/UserDataRemovalApplication.java b/app/src/main/java/dev/apitestingplatform/app/UserDataRemovalApplication.java
+new file mode 100644
+index 0000000..7f11ac2
+--- /dev/null
++++ b/app/src/main/java/dev/apitestingplatform/app/UserDataRemovalApplication.java
+@@ -0,0 +1,71 @@
++package dev.apitestingplatform.app;
++
++import dev.apitestingplatform.persistence.sqlite.DataDirectory;
++import javafx.application.Application;
++import javafx.application.Platform;
++import javafx.scene.control.Alert;
++import javafx.scene.control.ButtonBar;
++import javafx.scene.control.ButtonType;
++import javafx.scene.control.Label;
++import javafx.stage.Stage;
++
++import java.nio.file.Path;
++
++/** Confirmation window for the "Remove API Testing Platform Data" Start menu shortcut. */
++public final class UserDataRemovalApplication extends Application {
++    static final String TITLE = "Remove API Testing Platform Data";
++    private static final ButtonType REMOVE = new ButtonType("Remove data", ButtonBar.ButtonData.OK_DONE);
++
++    @Override public void start(Stage ignored) {
++        // The confirmation closes before the background removal reports back; exit explicitly instead.
++        Platform.setImplicitExit(false);
++        String local = System.getenv("LOCALAPPDATA");
++        if (local == null || local.isBlank()) { finish(Alert.AlertType.ERROR, "LOCALAPPDATA is unavailable, so no data was removed."); return; }
++        Path data;
++        try { data = DataDirectory.database().getParent(); }
++        catch (IllegalStateException unavailable) { finish(Alert.AlertType.ERROR, "The data folder could not be located, so no data was removed."); return; }
++
++        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, "", REMOVE, ButtonType.CANCEL);
++        confirm.setTitle(TITLE);
++        confirm.setHeaderText("Permanently remove your local API Testing Platform data?");
++        Label details = new Label(description(data));
++        details.setWrapText(true); details.setMaxWidth(520);
++        confirm.getDialogPane().setContent(details);
++        // Cancel is the default: pressing Enter must never delete data.
++        ((javafx.scene.control.Button) confirm.getDialogPane().lookupButton(REMOVE)).setDefaultButton(false);
++        ((javafx.scene.control.Button) confirm.getDialogPane().lookupButton(ButtonType.CANCEL)).setDefaultButton(true);
++        if (confirm.showAndWait().filter(REMOVE::equals).isEmpty()) { Platform.exit(); return; }
++
++        Thread.ofPlatform().daemon().name("user-data-removal").start(() -> {
++            UserDataRemoval.Result result = UserDataRemoval.remove(Path.of(local), data);
++            Platform.runLater(() -> finish(result.outcome() == UserDataRemoval.Outcome.REMOVED || result.outcome() == UserDataRemoval.Outcome.NOTHING_TO_REMOVE
++                    ? Alert.AlertType.INFORMATION : Alert.AlertType.WARNING, message(result)));
++        });
++    }
++
++    static String description(Path data) {
++        return "This deletes " + data + " for the current Windows user, including saved workspaces, collections, requests, "
++                + "environments, encrypted secrets, history, recovery drafts, automatic backups, logs, settings and caches.\n\n"
++                + "It cannot be undone. Use Workspace → Export workspace first if you need a portable copy. Files you exported "
++                + "or backed up to other folders are not touched. The application stays installed; uninstall it separately from "
++                + "Windows Settings → Apps.";
++    }
++
++    static String message(UserDataRemoval.Result result) {
++        return switch (result.outcome()) {
++            case REMOVED -> "Local data was removed from " + result.directory() + ".";
++            case NOTHING_TO_REMOVE -> "There is no local data at " + result.directory() + ".";
++            case IN_USE -> "API Testing Platform is running. Close it, then run this shortcut again. Nothing was removed.";
++            case REFUSED -> "The data folder location was not recognised, so nothing was removed.";
++            case INCOMPLETE -> result.remainingEntries() + " item(s) could not be removed, usually because another program has them open. "
++                    + "Close it and run this shortcut again, or delete " + result.directory() + " in File Explorer.";
++        };
++    }
++
++    private static void finish(Alert.AlertType type, String text) {
++        Alert alert = new Alert(type, text, ButtonType.OK);
++        alert.setTitle(TITLE); alert.setHeaderText(null);
++        alert.showAndWait();
++        Platform.exit();
++    }
++}
+diff --git a/app/src/test/java/dev/apitestingplatform/app/RuntimeLocationsTest.java b/app/src/test/java/dev/apitestingplatform/app/RuntimeLocationsTest.java
+new file mode 100644
+index 0000000..e77604f
+--- /dev/null
++++ b/app/src/test/java/dev/apitestingplatform/app/RuntimeLocationsTest.java
+@@ -0,0 +1,56 @@
++package dev.apitestingplatform.app;
++
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.io.TempDir;
++
++import java.nio.file.*;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++class RuntimeLocationsTest {
++    private static final List<String> PROPERTIES = List.of("javafx.cachedir", "jna.tmpdir", "org.sqlite.tmpdir", "jpackage.app-version");
++    private final Map<String, String> saved = new HashMap<>();
++    @TempDir Path data;
++
++    RuntimeLocationsTest() { PROPERTIES.forEach(name -> saved.put(name, System.getProperty(name))); }
++
++    @AfterEach void restore() {
++        saved.forEach((name, value) -> { if (value == null) System.clearProperty(name); else System.setProperty(name, value); });
++    }
++
++    @Test void nativeCachesLiveInTheVersionedDataFolderAndOlderVersionsAreRemoved() throws Exception {
++        PROPERTIES.forEach(System::clearProperty);
++        Path old = Files.createDirectories(data.resolve("cache").resolve("0.0.9").resolve("openjfx"));
++        Files.writeString(old.resolve("glass.dll"), "old");
++        Path unrelated = Files.writeString(data.resolve("platform.sqlite"), "db");
++
++        RuntimeLocations.configure(data, "0.1.0");
++
++        Path root = data.resolve("cache").resolve("0.1.0");
++        assertThat(System.getProperty("javafx.cachedir")).isEqualTo(root.resolve("openjfx").toString());
++        assertThat(System.getProperty("jna.tmpdir")).isEqualTo(root.resolve("jna").toString());
++        assertThat(System.getProperty("org.sqlite.tmpdir")).isEqualTo(root.resolve("sqlite").toString());
++        assertThat(root.resolve("openjfx")).isDirectory();
++        assertThat(data.resolve("cache").resolve("0.0.9")).doesNotExist();
++        assertThat(unrelated).hasContent("db");
++    }
++
++    @Test void explicitOverridesAreKept() {
++        System.setProperty("javafx.cachedir", "C:/custom");
++        RuntimeLocations.configure(data, "dev");
++        assertThat(System.getProperty("javafx.cachedir")).isEqualTo("C:/custom");
++    }
++
++    @Test void versionComesFromTheInstalledLauncherAndIsSanitised() {
++        System.clearProperty("jpackage.app-version");
++        assertThat(RuntimeLocations.applicationVersion()).isEqualTo("dev");
++        System.setProperty("jpackage.app-version", "0.2.0");
++        assertThat(RuntimeLocations.applicationVersion()).isEqualTo("0.2.0");
++        System.setProperty("jpackage.app-version", "..\\..\\escape");
++        assertThat(RuntimeLocations.applicationVersion()).isEqualTo("dev");
++    }
++}
+diff --git a/app/src/test/java/dev/apitestingplatform/app/UserDataRemovalTest.java b/app/src/test/java/dev/apitestingplatform/app/UserDataRemovalTest.java
+new file mode 100644
+index 0000000..a856234
+--- /dev/null
++++ b/app/src/test/java/dev/apitestingplatform/app/UserDataRemovalTest.java
+@@ -0,0 +1,86 @@
++package dev.apitestingplatform.app;
++
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.io.TempDir;
++
++import java.nio.channels.FileChannel;
++import java.nio.file.*;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.junit.jupiter.api.Assumptions.assumeTrue;
++
++class UserDataRemovalTest {
++    @TempDir Path local;
++
++    private Path populatedDataDirectory() throws Exception {
++        Path data = Files.createDirectories(local.resolve(UserDataRemoval.FOLDER));
++        Files.writeString(data.resolve("platform.sqlite"), "db");
++        Files.writeString(data.resolve("platform.sqlite-wal"), "wal");
++        Files.writeString(data.resolve("operations.properties"), "proxyMode=SYSTEM");
++        Files.createDirectories(data.resolve("logs")); Files.writeString(data.resolve("logs").resolve("events-0.log"), "{}");
++        Files.createDirectories(data.resolve("migration-backups"));
++        Files.createDirectories(data.resolve("cache").resolve("0.1.0").resolve("openjfx"));
++        return data;
++    }
++
++    @Test void removesTheCompleteDataFolderOnlyWhenExplicitlyRun() throws Exception {
++        Path data = populatedDataDirectory();
++        Path sibling = Files.writeString(local.resolve("Other application.txt"), "keep");
++
++        UserDataRemoval.Result result = UserDataRemoval.remove(local, data);
++
++        assertThat(result.outcome()).isEqualTo(UserDataRemoval.Outcome.REMOVED);
++        assertThat(data).doesNotExist();
++        assertThat(sibling).hasContent("keep");
++    }
++
++    @Test void refusesWhileTheApplicationHoldsItsInstanceLock() throws Exception {
++        Path data = populatedDataDirectory();
++        try (FileChannel running = FileChannel.open(data.resolve("platform.sqlite.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
++             var lock = running.lock()) {
++            assertThat(lock.isValid()).isTrue();
++            assertThat(UserDataRemoval.remove(local, data).outcome()).isEqualTo(UserDataRemoval.Outcome.IN_USE);
++        }
++        assertThat(data.resolve("platform.sqlite")).hasContent("db");
++        assertThat(data.resolve("logs").resolve("events-0.log")).exists();
++    }
++
++    @Test void refusesFoldersOutsideTheExpectedLocation() throws Exception {
++        Path unrelated = Files.createDirectories(local.resolve("Documents"));
++        Files.writeString(unrelated.resolve("keep.txt"), "keep");
++        Path nested = Files.createDirectories(local.resolve("x").resolve(UserDataRemoval.FOLDER));
++
++        assertThat(UserDataRemoval.remove(local, unrelated).outcome()).isEqualTo(UserDataRemoval.Outcome.REFUSED);
++        assertThat(UserDataRemoval.remove(local, nested).outcome()).isEqualTo(UserDataRemoval.Outcome.REFUSED);
++        assertThat(UserDataRemoval.remove(local, local.resolve(UserDataRemoval.FOLDER).resolve("..").resolve("Documents")).outcome())
++                .isEqualTo(UserDataRemoval.Outcome.REFUSED);
++        assertThat(unrelated.resolve("keep.txt")).exists();
++        assertThat(nested).exists();
++    }
++
++    @Test void reportsMissingDataWithoutCreatingIt() {
++        Path data = local.resolve(UserDataRemoval.FOLDER);
++        assertThat(UserDataRemoval.remove(local, data).outcome()).isEqualTo(UserDataRemoval.Outcome.NOTHING_TO_REMOVE);
++        assertThat(data).doesNotExist();
++    }
++
++    @Test void removesLinksWithoutVisitingTheirTargets() throws Exception {
++        Path data = populatedDataDirectory();
++        Path outside = Files.createDirectories(local.resolve("outside"));
++        Files.writeString(outside.resolve("keep.txt"), "keep");
++        try { Files.createSymbolicLink(data.resolve("linked"), outside); }
++        catch (UnsupportedOperationException | java.io.IOException | SecurityException noPrivilege) {
++            assumeTrue(false, "Creating symbolic links requires Developer Mode or elevation on Windows");
++        }
++
++        assertThat(UserDataRemoval.remove(local, data).outcome()).isEqualTo(UserDataRemoval.Outcome.REMOVED);
++        assertThat(outside.resolve("keep.txt")).hasContent("keep");
++    }
++
++    @Test void messagesNeverClaimRemovalThatDidNotHappen() {
++        Path data = local.resolve(UserDataRemoval.FOLDER);
++        assertThat(UserDataRemovalApplication.message(new UserDataRemoval.Result(UserDataRemoval.Outcome.IN_USE, data, 0))).contains("Nothing was removed");
++        assertThat(UserDataRemovalApplication.message(new UserDataRemoval.Result(UserDataRemoval.Outcome.INCOMPLETE, data, 2))).contains("2 item(s) could not be removed");
++        assertThat(UserDataRemovalApplication.description(data)).contains("cannot be undone").contains(data.toString());
++    }
++}
+diff --git a/docs/release-checklist.md b/docs/release-checklist.md
+new file mode 100644
+index 0000000..5ea5eda
+--- /dev/null
++++ b/docs/release-checklist.md
+@@ -0,0 +1,80 @@
++# Release instructions and installer validation checklist
++
++## Where installed files and user data live
++
++| What | Location | Install | Upgrade | Uninstall |
++| --- | --- | --- | --- | --- |
++| Application, bundled Java runtime, libraries | `C:\Program Files\API Testing Platform` (or the folder chosen during setup) | created | replaced | removed |
++| Start menu: *API Testing Platform*, *Remove API Testing Platform Data*; optional desktop shortcut | Start menu group *API Testing Platform* | created | replaced | removed |
++| SQLite database, WAL/SHM, instance lock | `%LOCALAPPDATA%\API Testing Platform\platform.sqlite*` | created at first start | kept, migrated at next start | **kept** |
++| Migration, restore-safety and pre-restore backups | `%LOCALAPPDATA%\API Testing Platform\migration-backups`, `recovery-backups` | as needed | kept | **kept** |
++| Logs | `%LOCALAPPDATA%\API Testing Platform\logs` | created | kept | **kept** |
++| Settings | `%LOCALAPPDATA%\API Testing Platform\appearance.properties`, `operations.properties` | created | kept | **kept** |
++| Native-library cache (JavaFX, JNA, SQLite) | `%LOCALAPPDATA%\API Testing Platform\cache\<version>` | created at first start | previous version's cache removed at next start | **kept** |
++
++The installer never writes to `%LOCALAPPDATA%`, so upgrading or uninstalling cannot delete user data. User data is removed only when the user runs **Start → API Testing Platform → Remove API Testing Platform Data** and confirms (Cancel is the default button), or deletes the folder manually. That tool refuses while the application is running, never follows links or junctions out of the folder, and does not touch exports or manual backups saved elsewhere. Run it before uninstalling if you want a complete removal; after uninstalling, delete `%LOCALAPPDATA%\API Testing Platform` in File Explorer instead.
++
++Encrypted request payloads and secrets are bound to the Windows user profile (DPAPI). Moving the data folder to another user or computer does not make them readable; use **Workspace → Export workspace…** for a portable copy.
++
++## Release steps
++
++1. **Choose the version.** Windows Installer compares `MAJOR.MINOR.PATCH` (maximum 255.255.65535); every release must be higher than the previous one or the upgrade is refused. Set it in all POMs:
++   ```powershell
++   .\mvnw.cmd -B org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion=0.2.0 -DgenerateBackupPoms=false
++   ```
++   Release builds use a version without `-SNAPSHOT`. (A `-SNAPSHOT` suffix is removed for the installer version.)
++2. **Prepare the build machine:** Windows 10/11 x64, Temurin JDK 25 in `JAVA_HOME`, WiX 5.0.2 (`.\packaging\windows\Install-WixToolset.ps1`). Start from a clean checkout of the release commit (`git status` empty), so `build-info.json` records `gitDirty: false`.
++3. **Build and validate:**
++   ```powershell
++   powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\windows\Invoke-ReleaseValidation.ps1
++   ```
++   It runs every automated test (`mvnw.cmd clean verify`), builds and smoke-tests the app image, builds the MSI and a next-patch MSI, and runs the elevated install/upgrade/downgrade/uninstall test with a temporary `LOCALAPPDATA`. Every step must be PASS. Results: `packaging\target\release-validation\summary.md`.
++4. **Validate on clean Windows** — a Windows Sandbox (`Start-SandboxValidation.ps1`), a fresh VM, or the CI `installer` job (push a `v*` tag or run the workflow manually). Then complete the manual checklist below on that clean machine.
++5. **Publish** `dist\API Testing Platform-<version>.msi` together with `SHA256SUMS.txt`. Keep `build-info.json` with the release notes. The MSI is not code-signed; Windows SmartScreen may warn until a signing certificate is used (`signtool sign` on the MSI before computing checksums).
++6. **Tag** the release commit `v<version>` and bump the development version to the next `-SNAPSHOT`.
++
++## Installer validation checklist
++
++Automated checks (`Test-Installer.ps1`, `Test-AppImage.ps1`) cover the items marked **A**; complete the rest by hand on a clean Windows 10 or 11 x64 machine without Java installed (`where java` finds nothing).
++
++### Install
++
++- [ ] **A** `msiexec` installs silently with exit code 0; interactive setup shows the folder chooser and desktop-shortcut prompt.
++- [ ] **A** One *API Testing Platform* entry in **Settings → Apps** with the expected version; upgrade code `74c383b2-1e8b-4a5e-8d88-e2eaae645a1b`.
++- [ ] **A** `C:\Program Files\API Testing Platform` contains the launcher, `runtime` (Java 25) and `app\mods`.
++- [ ] **A** Start menu contains *API Testing Platform* and *Remove API Testing Platform Data*.
++- [ ] Desktop shortcut exists only when chosen; the icon is shown in the Start menu, taskbar and Apps list.
++- [ ] Windows Defender/SmartScreen behaviour is noted (unsigned MSI).
++
++### First start
++
++- [ ] **A** Starts from the Start menu with no JDK on the machine; the window is ready in about three seconds on typical hardware.
++- [ ] **A** `%LOCALAPPDATA%\API Testing Platform` contains `platform.sqlite`, `logs` and `cache\<version>`; nothing is written to Program Files or `%USERPROFILE%\.openjfx`.
++- [ ] A standard user (not administrator) can start and use the installed application.
++- [ ] Network access works through the system proxy and HTTPS certificate validation works (send a request to a public HTTPS API).
++
++### Upgrade
++
++- [ ] **A** Installing a higher version replaces the old one in place (single Apps entry, new version).
++- [ ] **A** Saved workspaces, requests, environments, history, settings and logs are still present; the database is the same file and migrates at start.
++- [ ] **A** The previous version's native cache is removed at the next start.
++- [ ] **A** Installing an older version over a newer one is refused.
++- [ ] Encrypted secrets still decrypt after the upgrade (open a request using a secret variable and send it).
++
++### Uninstall
++
++- [ ] **A** Uninstalling from **Settings → Apps** or `msiexec /x` removes Program Files content and shortcuts.
++- [ ] **A** `%LOCALAPPDATA%\API Testing Platform` is preserved; reinstalling shows the existing data.
++- [ ] *Remove API Testing Platform Data* while the app is open reports that it is running and removes nothing.
++- [ ] *Remove API Testing Platform Data* → Cancel removes nothing; → **Remove data** deletes only `%LOCALAPPDATA%\API Testing Platform`.
++
++### Complete user journey (step 20)
++
++- [ ] Create and send a request; save it, close, reopen the app and reopen the request with settings intact.
++- [ ] Switch environments; final URL preview masks secret values.
++- [ ] Encrypted secret variable and Bearer/Basic/API-key authentication against a real endpoint.
++- [ ] Add assertions; run a collection, cancel a run; open the saved report after restart and export it.
++- [ ] Export a workspace and import it; a malformed import is rejected without changing data.
++- [ ] Recover a draft after ending the process from Task Manager.
++- [ ] Responses: HTTP 200, 204, 301, 400, 500; non-ASCII text; DNS failure, TLS failure, connection refused, timeout; a large and a chunked response; multipart upload.
++- [ ] Logs folder and diagnostic archive contain no tokens, cookies, passwords or bodies.
+diff --git a/docs/step-19-packaging.md b/docs/step-19-packaging.md
+new file mode 100644
+index 0000000..1581437
+--- /dev/null
++++ b/docs/step-19-packaging.md
+@@ -0,0 +1,50 @@
++# Step 19 — Windows packaging
++
++## Result
++
++`packaging\windows\Build-Installer.ps1` produces `dist\API Testing Platform-<version>.msi` (or `.exe` with `-Type exe`) using the Maven Wrapper, `jlink` and `jpackage`. The installer bundles a trimmed Java 25 runtime; users need no JDK, JRE, separate server or service.
++
++## Design
++
++- **Runtime.** `jlink` links only JDK modules (`packaging/windows/runtime-modules.txt`, cross-checked with `jdeps`; any detected module missing from the list is added with a warning). Application and library jars are not linked: `json-path`, `reactfx`, `richtextfx`, `flowless` and `undofx` are automatic modules, which `jlink` rejects. `jpackage` copies the module path into `app\mods` and starts `dev.apitestingplatform.app/dev.apitestingplatform.app.Main` with `--module-path $APPDIR\mods` and `--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna`. Debug data, headers, man pages and the `java.exe` launcher are stripped from the runtime.
++- **Module path.** `packaging/pom.xml` depends on `app`, so it is built last, and copies the runtime dependency graph at `package`. JavaFX's empty platform-independent jars are dropped; the build fails if the Windows (`-win`) JavaFX jars are missing.
++- **Entry point.** New `Main` runs before any native library loads. It sets `javafx.cachedir`, `jna.tmpdir` and `org.sqlite.tmpdir` to `%LOCALAPPDATA%\API Testing Platform\cache\<version>` (version from jpackage's `jpackage.app-version`, `dev` otherwise) and removes caches of other versions. JavaFX would otherwise extract DLLs into `%USERPROFILE%\.openjfx`. Explicit `-D` overrides are respected. `javafx:run` uses the same entry point.
++- **Data locations.** Unchanged and already outside the installation folder: database, WAL, lock, migration/recovery backups, logs and settings in `%LOCALAPPDATA%\API Testing Platform`. The cache is added there. Nothing is written to the installation directory; the smoke test verifies this.
++- **Install scope.** Per-machine install into Program Files. A jpackage per-user MSI installs into `%LOCALAPPDATA%\<name>`, which is exactly the data folder, so it is deliberately not used.
++- **Upgrade.** A fixed upgrade code (`installer.upgradeUuid` in `packaging/pom.xml`) makes a higher version replace the installed one in place. The MSI never owns files in `%LOCALAPPDATA%`, so data survives; schema migrations with their pre-migration backup run at the next start. Lower versions are refused.
++- **Uninstall.** Removes Program Files content and shortcuts and keeps user data. Removing data is a separate, explicit choice: the second launcher **Remove API Testing Platform Data** (`Main --remove-user-data`) shows a confirmation with Cancel as default, refuses while the app holds its instance lock, deletes only `%LOCALAPPDATA%\API Testing Platform`, and removes links/junctions without visiting their targets. An uninstall-time checkbox was not used because Windows usually uninstalls MSIs without showing dialogs, so such a choice would be silently skipped.
++- **Reproducibility.** Toolchain is pinned or checked: JDK 25 (`java.specification.version`), Maven via the wrapper, `maven-dependency-plugin` 3.8.1, WiX 5.0.2 (`Install-WixToolset.ps1`). All installer metadata is read from `packaging/pom.xml`. Each build writes `SHA256SUMS.txt` and `build-info.json` with commit, dirty state, JDK, WiX, runtime modules, the SHA-256 of every bundled jar and the smoke-test result. MSI files embed timestamps, so builds are reproducible in inputs and procedure, not bit-for-bit.
++- **Icon.** `packaging/windows/app.ico` (16–256 px), used for the launchers, shortcuts and Apps list.
++
++## Files
++
++| File | Purpose |
++| --- | --- |
++| `app/.../Main.java`, `RuntimeLocations.java` | Packaged entry point; native caches under LOCALAPPDATA |
++| `app/.../UserDataRemoval.java`, `UserDataRemovalApplication.java` | Explicit user-data removal and its confirmation window |
++| `app/.../RuntimeLocationsTest.java`, `UserDataRemovalTest.java` | Cache locations, overrides, version sanitising; removal, in-use refusal, wrong-folder refusal, links, messages |
++| `packaging/pom.xml` | Installer metadata, module-path copy |
++| `packaging/windows/Build-Installer.ps1` | Build: Maven Wrapper → jlink → jpackage app image → smoke test → MSI → checksums |
++| `packaging/windows/Test-AppImage.ps1` | Launch without system Java, temporary LOCALAPPDATA, checks write locations |
++| `packaging/windows/Test-Installer.ps1` | Install / upgrade / downgrade refusal / uninstall validation |
++| `packaging/windows/Start-SandboxValidation.ps1` | The same validation in Windows Sandbox |
++| `packaging/windows/Invoke-ReleaseValidation.ps1` | One-command release validation (step 20) |
++| `packaging/windows/Install-WixToolset.ps1`, `Common.ps1`, `runtime-modules.txt`, `app.ico` | Tooling and inputs |
++| `.github/workflows/windows.yml` | CI: verify on every push; MSI build and lifecycle test on a clean runner for tags/manual runs |
++| `docs/release-checklist.md` | Release instructions and installer validation checklist |
++
++## Verification so far
++
++Done while implementing (cloud Linux environment, JDK 25.0.1, PowerShell 7.4):
++
++- `jlink` (JDK 25 without `jmods`, linking from the run-time image) followed by `jpackage --runtime-image … --module-path … --module …` with an automatic-module dependency: `jpackage` copies the jars to `app/mods`, writes `--module-path $APPDIR/mods`, passes `-Djpackage.app-version`, and the launcher starts. An additional launcher whose name contains spaces receives `--remove-user-data`. The app image does not record the additional launcher's Start-menu flags, so the installer is built directly from the inputs rather than from the app image.
++- `UserDataRemoval` and `RuntimeLocations` compiled and exercised: refuses while locked, removes everything, keeps a symlink target outside the folder, refuses other folders, reports missing data; caches go to the versioned folder and old versions are removed.
++- All PowerShell scripts parse without errors, contain only ASCII and avoid PowerShell 7-only syntax; installer settings and version rules were evaluated against the real POMs.
++
++Not possible there: Maven Central is blocked in that environment and MSI creation needs Windows, so the full Maven build, the new JUnit tests, `jpackage --type msi` and installation run on Windows with `Invoke-ReleaseValidation.ps1`. Results are recorded in [Step 20](step-20-release-validation.md).
++
++## Limitations
++
++- The MSI is not code-signed (no certificate available); SmartScreen may warn.
++- The *Remove API Testing Platform Data* shortcut is removed with the application; after uninstalling, the folder is deleted manually.
++- Windows Sandbox needs Windows Pro/Enterprise/Education and hardware virtualization enabled in firmware.
+diff --git a/docs/step-20-release-validation.md b/docs/step-20-release-validation.md
+new file mode 100644
+index 0000000..d6126de
+--- /dev/null
++++ b/docs/step-20-release-validation.md
+@@ -0,0 +1,50 @@
++# Step 20 — release validation
++
++## How validation is run
++
++```powershell
++powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\windows\Invoke-ReleaseValidation.ps1
++```
++
++1. Checks JDK 25 and WiX (installs WiX 5.0.2 when the .NET SDK is present).
++2. `Build-Installer.ps1`: `mvnw.cmd clean verify` (every automated test), `jlink`, app image, smoke test without system Java, MSI, checksums. Surefire results are summarised per module.
++3. Builds a next-patch MSI from the same code to test upgrading in place.
++4. Elevated `Test-Installer.ps1` with a temporary `LOCALAPPDATA`: install, launch, upgrade, launch, downgrade refusal, uninstall with data preserved.
++
++Results land in `packaging\target\release-validation` (`summary.md`, `summary.json`, build and msiexec logs, `installer-validation.md`). The manual part of the journey is the checklist in [release-checklist.md](release-checklist.md).
++
++## Required journey and where it is covered
++
++| Requirement | Automated coverage |
++| --- | --- |
++| Install on clean Windows, upgrade, uninstall | `Test-Installer.ps1` (local run, Windows Sandbox or the CI `installer` job on a clean runner) |
++| Launch without a Java installation | `Test-AppImage.ps1` removes `JAVA_HOME` and Java from `PATH`; checks the bundled Java 25 runtime |
++| Create, send, save, reopen after restart | `LibraryIntegrationTest.sendsSavesClosesAndReopensAllSettingsAfterRestart` |
++| Switch environments, encrypted secrets, authentication | `EnvironmentIntegrationTest`, `AuthenticationIntegrationTest`, `DpapiPayloadProtectorTest` |
++| Assertions, run and cancel a collection | `AssertionIntegrationTest`, `CollectionRunIntegrationTest.cancellingOrClosingStopsActiveHttpAndPreventsLaterRequests` |
++| Saved report after restart, export | `HistoryTransferIntegrationTest.manualSendReopensSanitizedHistoryAfterRestartAndExportsReadableReports` |
++| Export and import; malformed imports | `HistoryTransferIntegrationTest.workspaceFileRoundTrip…`, `PortableWorkspaceFormatTest.rejectsMalformedReferencesTypesVersionsAndUnsupportedFields`, `…rejectsDuplicateJsonPropertiesDeepInputAndOversizedFiles` |
++| Draft recovery | `LibraryIntegrationTest.recoversUnfinishedTabWithoutOverwritingSavedRequestAndNormalCloseClearsSnapshots` |
++| HTTP 200, 204, 301, 400, 500 | `JavaHttpExecutionEngineTest` (`returnsHttpErrorStatusAsACompletedResponse`, `handlesRedirectsAndNeverPolicy`, `detectsRedirectLoopsAndRedirectLimit`), `ResponseDebuggingIntegrationTest` |
++| Non-ASCII text | `JavaHttpExecutionEngineTest`, `ResponsePresentationTest` |
++| DNS, TLS, connection, timeout errors | `reportsConnectionRefusedAndDnsFailures`, `negotiatesHttpsHttp2AndReportsUntrustedCertificates`, `enforcesTimeoutAcrossBodyReadingAndReleasesCapacity` |
++| Large and chunked responses | `capsChunkedResponsesAndRequestBodies`, `configuredCaptureLimitBoundsLargeResponse`, `cancelsDuringChunkedBodyDownload…` |
++| Multipart uploads | `streamsMultipartFilesAndReplaysTheExactBodyOn307` |
++| Logs and exports reveal no secrets | `OperationsServiceTest.diagnosticArchiveWhitelistsEvents…`, `actualHttpLogsOnlyNumericOutcome…`, `PortableWorkspaceFormatTest.defaultExportOmitsCredentials…`, `RedactedRequestSummaryTest`, `SecretRedactorTest` |
++| Explicit data removal | `UserDataRemovalTest` |
++
++## Results
++
++Pending: `Invoke-ReleaseValidation.ps1` has not been run on Windows yet for this change. Fill this section from `packaging\target\release-validation\summary.md`, fix any blocking failure and run it again before declaring the release ready.
++
++| Step | Result |
++| --- | --- |
++| Automated tests (`mvnw.cmd clean verify`) | pending |
++| Build, app smoke test and MSI | pending |
++| Install / upgrade / downgrade / uninstall | pending |
++| Clean-Windows validation (Sandbox, VM or CI) | pending |
++| Manual checklist | pending |
++
++## Release readiness
++
++Not yet declared. Known limitations independent of the results: the MSI is unsigned; clean-machine validation needs Windows Sandbox (hardware virtualization), a VM or the CI workflow.
+diff --git a/packaging/README.md b/packaging/README.md
+index ec7c1d0..0d61d58 100644
+--- a/packaging/README.md
++++ b/packaging/README.md
+@@ -1,5 +1,47 @@
+-# Windows packaging module
++# Windows packaging
+ 
+-This module owns the Windows `jlink` and `jpackage` configuration. The final MSI workflow will be enabled in the dedicated packaging increment after the application modules contain executable functionality and production icons.
++This module turns the application into a Windows installer that bundles its own Java runtime. Installed users need no JDK, JRE, Maven, server, service, Docker or WSL.
+ 
+-The current `app` module already defines the custom runtime image name and launcher metadata used by that future workflow.
++## What gets built
++
++| Output | Where | Notes |
++| --- | --- | --- |
++| Module path | `packaging/target/jpackage/modules` | Copied by `maven-dependency-plugin` during `mvnw.cmd verify`: the `app` jar and its complete runtime dependency graph, including the Windows JavaFX jars. |
++| Java runtime | `packaging/target/jpackage/runtime` | `jlink` image containing only the JDK modules in `windows/runtime-modules.txt` plus anything `jdeps` detects. Libraries are not linked because several are automatic modules; `jpackage` installs them in `app\mods`. |
++| App image | `packaging/target/jpackage/image/API Testing Platform` | Smoke-tested before the installer is produced. |
++| Installer | `dist/API Testing Platform-<version>.msi` | Per-machine install into `C:\Program Files\API Testing Platform`, Start menu group, optional desktop shortcut, install-folder chooser. |
++| Checksums, build record | `dist/SHA256SUMS.txt`, `dist/API Testing Platform-<version>.build-info.json` | Commit, JDK, WiX, runtime modules, SHA-256 of every bundled jar and the smoke-test result. |
++
++Installer metadata (name, vendor, description, upgrade code, main module, JVM options) lives only in `packaging/pom.xml`. **Never change `installer.upgradeUuid`**: Windows Installer uses it to find and replace older versions.
++
++## Prerequisites (build machine only)
++
++- Windows 10 or 11 x64
++- JDK 25 (Temurin 25 is used for releases) in `JAVA_HOME`
++- WiX Toolset 5.0.2 for `.msi`/`.exe`: install the .NET 8 SDK, then run `.\packaging\windows\Install-WixToolset.ps1`. WiX 3.14 (`candle`/`light` on `PATH`) also works with jpackage 25.
++
++## Build
++
++From PowerShell in the repository root:
++
++```powershell
++$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot"
++.\packaging\windows\Build-Installer.ps1
++```
++
++Useful switches: `-SkipTests` (iteration only, never for a release), `-AppImageOnly` (no WiX needed), `-Type exe`, `-AppVersion 0.1.1`, `-Offline`, `-SkipMavenBuild`.
++
++The script fails instead of producing a partial installer when the JDK is not 25, `jlink`/`jpackage` are missing, the Windows JavaFX jars are absent, the app image is incomplete or the smoke test fails.
++
++## Validate
++
++| Script | Purpose |
++| --- | --- |
++| `Test-AppImage.ps1 -Launcher <exe>` | Starts a packaged or installed launcher with a temporary `LOCALAPPDATA`, no `JAVA_HOME` and no Java on `PATH`. Passes only if the window becomes ready, the app exits normally, the database, logs and JavaFX native cache are created under `LOCALAPPDATA`, and nothing in the installation folder changes. |
++| `Test-Installer.ps1 -Msi <msi> [-UpgradeMsi <msi>]` | Elevated, on a clean machine: install, launch, upgrade in place, launch, refuse downgrade, uninstall; checks registration, shortcuts, bundled Java and that user data survives upgrade and uninstall. |
++| `Start-SandboxValidation.ps1 -Msi <msi> [-UpgradeMsi <msi>]` | Runs `Test-Installer.ps1` in a disposable Windows Sandbox (clean Windows without Java). Needs Windows Pro/Enterprise and hardware virtualization. |
++| `Invoke-ReleaseValidation.ps1` | One command for release validation: all tests, installer, upgrade-test MSI and the elevated lifecycle test. Summary in `packaging/target/release-validation`. |
++
++The CI workflow `.github/workflows/windows.yml` runs `mvnw.cmd clean verify` on every push and, for `v*` tags or a manual run, builds the MSI and runs `Test-Installer.ps1` on a clean hosted Windows runner.
++
++See [the release instructions and installer validation checklist](../docs/release-checklist.md).
+diff --git a/packaging/pom.xml b/packaging/pom.xml
+index 5d835de..2f8d509 100644
+--- a/packaging/pom.xml
++++ b/packaging/pom.xml
+@@ -12,11 +12,54 @@
+     <packaging>pom</packaging>
+     <name>API Testing Platform - Windows Packaging</name>
+ 
++    <!--
++        Installer metadata. packaging/windows/Build-Installer.ps1 reads these values, so this file is the
++        single source of truth. Never change installer.upgradeUuid: Windows Installer uses it to recognise
++        older versions and replace them in place during an upgrade.
++    -->
+     <properties>
+         <installer.name>API Testing Platform</installer.name>
+         <installer.type>msi</installer.type>
+         <installer.vendor>API Testing Platform</installer.vendor>
++        <installer.description>Local desktop application for testing HTTP APIs</installer.description>
++        <installer.copyright>Copyright (c) 2026 API Testing Platform contributors</installer.copyright>
++        <installer.upgradeUuid>74c383b2-1e8b-4a5e-8d88-e2eaae645a1b</installer.upgradeUuid>
++        <installer.mainModule>dev.apitestingplatform.app/dev.apitestingplatform.app.Main</installer.mainModule>
++        <installer.javaOptions>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna</installer.javaOptions>
+         <installer.destination>${project.parent.basedir}/dist</installer.destination>
++        <installer.modules>${project.build.directory}/jpackage/modules</installer.modules>
+     </properties>
+-</project>
+ 
++    <dependencies>
++        <!-- Depending on app orders this module last in the reactor and brings in the complete runtime graph. -->
++        <dependency>
++            <groupId>dev.apitestingplatform</groupId>
++            <artifactId>app</artifactId>
++        </dependency>
++    </dependencies>
++
++    <build>
++        <plugins>
++            <plugin>
++                <groupId>org.apache.maven.plugins</groupId>
++                <artifactId>maven-dependency-plugin</artifactId>
++                <executions>
++                    <execution>
++                        <!-- The exact jars jpackage puts on the installed application's module path. -->
++                        <id>copy-runtime-modules</id>
++                        <phase>package</phase>
++                        <goals>
++                            <goal>copy-dependencies</goal>
++                        </goals>
++                        <configuration>
++                            <includeScope>runtime</includeScope>
++                            <outputDirectory>${installer.modules}</outputDirectory>
++                            <overWriteReleases>true</overWriteReleases>
++                            <overWriteSnapshots>true</overWriteSnapshots>
++                        </configuration>
++                    </execution>
++                </executions>
++            </plugin>
++        </plugins>
++    </build>
++</project>
+diff --git a/packaging/windows/Build-Installer.ps1 b/packaging/windows/Build-Installer.ps1
+new file mode 100644
+index 0000000..dc5b6f2
+--- /dev/null
++++ b/packaging/windows/Build-Installer.ps1
+@@ -0,0 +1,184 @@
++<#
++.SYNOPSIS
++    Builds the Windows installer for API Testing Platform with a bundled Java runtime.
++
++.DESCRIPTION
++    1. Checks Windows x64, JDK 25 (java, jlink, jpackage, jdeps) and WiX Toolset.
++    2. Runs the Maven Wrapper build (clean verify), which also copies the runtime module path
++       to packaging\target\jpackage\modules.
++    3. Links a minimal Java runtime with jlink (JDK modules only).
++    4. Creates an app image with jpackage and smoke-tests it with temporary user data.
++    5. Creates the MSI (or EXE) with jpackage, plus SHA-256 checksums and build information in dist\.
++
++    Users of the installer need no JDK, JRE, server or service.
++
++.EXAMPLE
++    .\packaging\windows\Build-Installer.ps1
++.EXAMPLE
++    .\packaging\windows\Build-Installer.ps1 -AppVersion 0.1.1 -SkipTests
++#>
++[CmdletBinding()]
++param(
++    [ValidateSet('msi', 'exe')][string]$Type = 'msi',
++    # Defaults to the Maven project version without -SNAPSHOT.
++    [string]$AppVersion,
++    [string]$Destination,
++    [string]$JavaHome = $env:JAVA_HOME,
++    [switch]$SkipTests,
++    # Reuse an existing packaging\target\jpackage\modules from a previous Maven build.
++    [switch]$SkipMavenBuild,
++    [switch]$Offline,
++    # Stop after the tested app image; no WiX Toolset is required.
++    [switch]$AppImageOnly,
++    [switch]$SkipSmokeTest
++)
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++Assert-WindowsX64
++$root = Get-RepositoryRoot
++$settings = Get-InstallerSettings $root
++if ([string]::IsNullOrWhiteSpace($AppVersion)) { $AppVersion = $settings.ProjectVersion }
++$AppVersion = ConvertTo-InstallerVersion $AppVersion
++if ([string]::IsNullOrWhiteSpace($Destination)) { $Destination = Join-Path $root 'dist' }
++$jdk = Get-Jdk $JavaHome
++$env:JAVA_HOME = $jdk.Home
++$wix = 'not used (app image only)'
++if (-not $AppImageOnly) { $wix = Get-WixToolset }
++Write-Host "Packaging $($settings.Name) $AppVersion with $($jdk.Vendor) $($jdk.Version) and $wix"
++
++# --- Maven Wrapper build ---------------------------------------------------------------------------
++if (-not $SkipMavenBuild) {
++    $maven = @('-B', '--no-transfer-progress')
++    if ($Offline) { $maven += '--offline' }
++    if ($SkipTests) { $maven += '-DskipTests' }
++    $maven += @('clean', 'verify')
++    Push-Location $root
++    try { Invoke-Checked (Join-Path $root 'mvnw.cmd') $maven 'Maven Wrapper build (mvnw.cmd clean verify)' }
++    finally { Pop-Location }
++}
++
++$work = Join-Path $root 'packaging\target\jpackage'
++$copied = Join-Path $work 'modules'
++if (-not (Test-Path -LiteralPath $copied)) { throw "$copied does not exist. Run without -SkipMavenBuild." }
++
++# Copy the module path, dropping JavaFX's empty platform-independent jars (the -win jars hold the code).
++$modulePath = New-EmptyDirectory (Join-Path $work 'mods')
++$jars = @(Get-ChildItem -LiteralPath $copied -Filter '*.jar' | Where-Object { $_.Name -notmatch '^javafx-[a-z]+-[0-9.]+\.jar$' })
++foreach ($jar in $jars) { Copy-Item -LiteralPath $jar.FullName -Destination $modulePath }
++if (-not ($jars | Where-Object { $_.Name -match '^app-.+\.jar$' })) { throw 'The app module jar is missing from the copied module path.' }
++if (-not ($jars | Where-Object { $_.Name -match '^javafx-graphics-.+-win\.jar$' })) {
++    throw 'The Windows JavaFX jars are missing. Build on Windows so Maven selects the "win" JavaFX classifier.'
++}
++
++# --- Bundled Java runtime --------------------------------------------------------------------------
++$listed = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'runtime-modules.txt') |
++        ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
++$detected = @()
++$jarPaths = @($jars | ForEach-Object { Join-Path $modulePath $_.Name })
++$jdeps = Invoke-Captured $jdk.Jdeps (@('--multi-release', '25', '--ignore-missing-deps', '--print-module-deps',
++        '--class-path', ($jarPaths -join ';')) + $jarPaths)
++$printed = $jdeps.Output | Where-Object { $_ -match '^[a-z][a-z0-9_.]*(,[a-z][a-z0-9_.]*)*$' } | Select-Object -Last 1
++if ($jdeps.ExitCode -eq 0 -and $printed) { $detected = @($printed -split ',') }
++else { Write-Warning "jdeps could not analyse the module path; using runtime-modules.txt only.`n$($jdeps.Output -join "`n")" }
++$missing = @($detected | Where-Object { $listed -notcontains $_ })
++if ($missing.Count -gt 0) { Write-Warning "jdeps found JDK modules not listed in runtime-modules.txt; adding them: $($missing -join ', ')" }
++$runtimeModules = @($listed + $missing | Sort-Object -Unique)
++
++$runtime = Join-Path $work 'runtime'
++if (Test-Path -LiteralPath $runtime) { Remove-Item -LiteralPath $runtime -Recurse -Force }
++Invoke-Checked $jdk.Jlink @('--add-modules', ($runtimeModules -join ','), '--strip-debug', '--no-header-files',
++    '--no-man-pages', '--strip-native-commands', '--compress', 'zip-6', '--output', $runtime) 'jlink (bundled Java runtime)'
++
++# --- jpackage ----------------------------------------------------------------------------------------
++$icon = Join-Path $PSScriptRoot 'app.ico'
++$removeProperties = Join-Path $work 'remove-user-data.properties'
++# Properties files treat backslashes as escapes; forward slashes are valid Windows paths.
++@(
++    'arguments=--remove-user-data'
++    "description=Permanently removes this Windows user's $($settings.Name) data after confirmation"
++    "icon=$($icon.Replace('\', '/'))"
++    'win-menu=true'
++    'win-shortcut=false'
++) | Set-Content -LiteralPath $removeProperties -Encoding ASCII
++
++$common = @(
++    '--name', $settings.Name,
++    '--app-version', $AppVersion,
++    '--vendor', $settings.Vendor,
++    '--description', $settings.Description,
++    '--copyright', $settings.Copyright,
++    '--icon', $icon,
++    '--runtime-image', $runtime,
++    '--module-path', $modulePath,
++    '--module', $settings.MainModule,
++    '--java-options', $settings.JavaOptions,
++    '--add-launcher', "$($settings.RemoveLauncher)=$removeProperties"
++)
++
++$images = New-EmptyDirectory (Join-Path $work 'image')
++Invoke-Checked $jdk.Jpackage (@('--type', 'app-image', '--dest', $images) + $common) 'jpackage app image'
++$image = Join-Path $images $settings.Name
++$launcher = Join-Path $image "$($settings.Name).exe"
++foreach ($required in $launcher, (Join-Path $image "$($settings.RemoveLauncher).exe"), (Join-Path $image 'runtime\release')) {
++    if (-not (Test-Path -LiteralPath $required)) { throw "The app image is incomplete: $required is missing." }
++}
++$smoke = $null
++if (-not $SkipSmokeTest) {
++    $smoke = & (Join-Path $PSScriptRoot 'Test-AppImage.ps1') -Launcher $launcher -ExpectedVersion $AppVersion
++}
++if ($AppImageOnly) {
++    Write-Host "App image ready: $image" -ForegroundColor Green
++    return
++}
++
++New-Item -ItemType Directory -Path $Destination -Force | Out-Null
++$installer = Join-Path $Destination "$($settings.Name)-$AppVersion.$Type"
++if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force }
++# Per-machine install into Program Files: user data in %LOCALAPPDATA% stays separate from the install
++# directory (a per-user jpackage install would use %LOCALAPPDATA%\<name> itself).
++Invoke-Checked $jdk.Jpackage (@('--type', $Type, '--dest', $Destination) + $common + @(
++        '--win-upgrade-uuid', $settings.UpgradeUuid,
++        '--win-menu', '--win-menu-group', $settings.Name,
++        '--win-shortcut', '--win-shortcut-prompt',
++        '--win-dir-chooser')) "jpackage $Type installer"
++if (-not (Test-Path -LiteralPath $installer)) { throw "jpackage did not create $installer." }
++
++# --- Checksums and build record ----------------------------------------------------------------------
++$hash = Get-FileSha256 $installer
++$fileName = Split-Path -Leaf $installer
++$sums = Join-Path $Destination 'SHA256SUMS.txt'
++$lines = @()
++if (Test-Path -LiteralPath $sums) { $lines = @(Get-Content -LiteralPath $sums | Where-Object { $_ -notmatch "\*$([regex]::Escape($fileName))$" }) }
++@($lines + "$hash *$fileName") | Set-Content -LiteralPath $sums -Encoding ASCII
++
++$commit = 'unknown'; $dirty = $null
++if (Get-Command 'git.exe' -ErrorAction SilentlyContinue) {
++    $head = Invoke-Captured 'git.exe' @('-C', $root, 'rev-parse', 'HEAD')
++    if ($head.ExitCode -eq 0) {
++        $commit = $head.Output[0]
++        $dirty = ((Invoke-Captured 'git.exe' @('-C', $root, 'status', '--porcelain')).Output.Count -gt 0)
++    }
++}
++$jars = @($jars | Sort-Object Name | ForEach-Object { [ordered]@{ file = $_.Name; sha256 = Get-FileSha256 $_.FullName } })
++[ordered]@{
++    application     = $settings.Name
++    version         = $AppVersion
++    projectVersion  = $settings.ProjectVersion
++    installer       = $fileName
++    sha256          = $hash
++    upgradeUuid     = $settings.UpgradeUuid
++    gitCommit       = $commit
++    gitDirty        = $dirty
++    builtAtUtc      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
++    jdk             = "$($jdk.Vendor) $($jdk.Version)"
++    wix             = $wix
++    testsSkipped    = [bool]$SkipTests
++    runtimeModules  = $runtimeModules
++    jdepsDetected   = $detected
++    smokeTest       = $smoke
++    modulePath      = $jars
++} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Destination "$($settings.Name)-$AppVersion.build-info.json") -Encoding UTF8
++
++Write-Host "Installer: $installer" -ForegroundColor Green
++Write-Host "SHA-256:   $hash"
+diff --git a/packaging/windows/Common.ps1 b/packaging/windows/Common.ps1
+new file mode 100644
+index 0000000..3232b86
+--- /dev/null
++++ b/packaging/windows/Common.ps1
+@@ -0,0 +1,133 @@
++# Shared helpers for the Windows packaging scripts. Compatible with Windows PowerShell 5.1 and PowerShell 7.
++Set-StrictMode -Version 3.0
++
++function Get-RepositoryRoot {
++    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
++}
++
++function Assert-WindowsX64 {
++    if ($env:OS -ne 'Windows_NT') { throw 'Windows packaging must run on Windows 10 or Windows 11.' }
++    if (-not [Environment]::Is64BitOperatingSystem) { throw 'A 64-bit Windows installation is required.' }
++}
++
++function Get-XmlText([System.Xml.XmlElement]$Parent, [string]$Name) {
++    $node = $Parent.SelectSingleNode("*[local-name()='$Name']")
++    if ($null -eq $node -or [string]::IsNullOrWhiteSpace($node.InnerText)) { throw "pom.xml is missing <$Name>." }
++    return $node.InnerText.Trim()
++}
++
++# packaging/pom.xml is the single source of installer metadata.
++function Get-InstallerSettings([string]$Root) {
++    [xml]$packaging = Get-Content -LiteralPath (Join-Path $Root 'packaging\pom.xml') -Raw
++    [xml]$parent = Get-Content -LiteralPath (Join-Path $Root 'pom.xml') -Raw
++    $properties = $packaging.DocumentElement.SelectSingleNode("*[local-name()='properties']")
++    return [pscustomobject]@{
++        Name           = Get-XmlText $properties 'installer.name'
++        Vendor         = Get-XmlText $properties 'installer.vendor'
++        Description    = Get-XmlText $properties 'installer.description'
++        Copyright      = Get-XmlText $properties 'installer.copyright'
++        UpgradeUuid    = Get-XmlText $properties 'installer.upgradeUuid'
++        MainModule     = Get-XmlText $properties 'installer.mainModule'
++        JavaOptions    = Get-XmlText $properties 'installer.javaOptions'
++        ProjectVersion = Get-XmlText $parent.DocumentElement 'version'
++        RemoveLauncher = 'Remove API Testing Platform Data'
++    }
++}
++
++# Windows Installer compares major.minor.build only, with limits 255.255.65535.
++function ConvertTo-InstallerVersion([string]$Version) {
++    $candidate = $Version -replace '-SNAPSHOT$', ''
++    if ($candidate -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
++        throw "Installer version '$Version' must look like MAJOR.MINOR.PATCH (an optional -SNAPSHOT suffix is removed)."
++    }
++    if ([int]$Matches[1] -gt 255 -or [int]$Matches[2] -gt 255 -or [int]$Matches[3] -gt 65535) {
++        throw "Installer version '$candidate' exceeds the Windows Installer limit 255.255.65535."
++    }
++    return $candidate
++}
++
++function Invoke-Checked([string]$FilePath, [string[]]$Arguments, [string]$Activity) {
++    Write-Host "> $Activity" -ForegroundColor Cyan
++    & $FilePath @Arguments
++    if ($LASTEXITCODE -ne 0) { throw "$Activity failed with exit code $LASTEXITCODE." }
++}
++
++# Captures stdout and stderr as text. Windows PowerShell 5.1 would otherwise turn redirected stderr into errors.
++function Invoke-Captured([string]$FilePath, [string[]]$Arguments) {
++    $previous = $ErrorActionPreference
++    $ErrorActionPreference = 'Continue'
++    try {
++        $output = @(& $FilePath @Arguments 2>&1 | ForEach-Object { "$_" })
++        $code = $LASTEXITCODE
++    } finally { $ErrorActionPreference = $previous }
++    return [pscustomobject]@{ ExitCode = $code; Output = $output }
++}
++
++function Get-Jdk([string]$JavaHome) {
++    if ([string]::IsNullOrWhiteSpace($JavaHome)) {
++        throw 'Set JAVA_HOME (or pass -JavaHome) to a JDK 25 installation, for example C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot.'
++    }
++    $tools = [ordered]@{}
++    foreach ($tool in 'java', 'jlink', 'jpackage', 'jdeps') {
++        $path = Join-Path $JavaHome "bin\$tool.exe"
++        if (-not (Test-Path -LiteralPath $path)) { throw "$path is missing. JAVA_HOME must point to a full JDK 25, not a JRE." }
++        $tools[$tool] = $path
++    }
++    $settings = Invoke-Captured $tools.java @('-XshowSettings:properties', '-version')
++    $read = {
++        param($key)
++        $line = $settings.Output | Where-Object { $_ -match "^\s*$([regex]::Escape($key)) = " } | Select-Object -First 1
++        if ($null -eq $line) { return '' }
++        return ($line -replace "^\s*$([regex]::Escape($key)) = ", '').Trim()
++    }
++    $specification = & $read 'java.specification.version'
++    if ($specification -ne '25') { throw "JDK 25 is required; $JavaHome reports Java '$specification'." }
++    return [pscustomobject]@{
++        Home     = $JavaHome
++        Version  = & $read 'java.runtime.version'
++        Vendor   = & $read 'java.vendor'
++        Java     = $tools.java
++        Jlink    = $tools.jlink
++        Jpackage = $tools.jpackage
++        Jdeps    = $tools.jdeps
++    }
++}
++
++# jpackage 25 supports WiX Toolset v3 (candle/light) and v4/v5 (wix.exe with the Util and UI extensions).
++function Get-WixToolset {
++    $dotnetTools = Join-Path $env:USERPROFILE '.dotnet\tools'
++    if ((Test-Path -LiteralPath (Join-Path $dotnetTools 'wix.exe')) -and (($env:PATH -split ';') -notcontains $dotnetTools)) {
++        $env:PATH = "$dotnetTools;$env:PATH"
++    }
++    $wix = Get-Command 'wix.exe' -ErrorAction SilentlyContinue
++    if ($null -ne $wix) {
++        $version = ((Invoke-Captured $wix.Source @('--version')).Output | Select-Object -First 1) -replace '\+.*$', ''
++        $major = 0
++        [void][int]::TryParse(($version -split '\.')[0], [ref]$major)
++        if ($major -ge 6) { Write-Warning "WiX $version is newer than the WiX 5 release this build is validated with." }
++        if ($major -ge 4) {
++            $extensions = (Invoke-Captured $wix.Source @('extension', 'list', '-g')).Output -join "`n"
++            foreach ($extension in 'WixToolset.Util.wixext', 'WixToolset.UI.wixext') {
++                if ($extensions -notmatch [regex]::Escape($extension)) {
++                    throw "WiX $version is missing the global $extension extension. Run packaging\windows\Install-WixToolset.ps1."
++                }
++            }
++            return "WiX $version"
++        }
++    }
++    $candle = Get-Command 'candle.exe' -ErrorAction SilentlyContinue
++    $light = Get-Command 'light.exe' -ErrorAction SilentlyContinue
++    if ($null -ne $candle -and $null -ne $light) {
++        return "WiX $((Get-Item -LiteralPath $candle.Source).VersionInfo.ProductVersion)"
++    }
++    throw 'WiX Toolset was not found. Run packaging\windows\Install-WixToolset.ps1 (installs WiX 5.0.2 as a .NET tool), then open a new PowerShell window.'
++}
++
++function Get-FileSha256([string]$Path) {
++    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
++}
++
++function New-EmptyDirectory([string]$Path) {
++    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
++    return (New-Item -ItemType Directory -Path $Path -Force).FullName
++}
+diff --git a/packaging/windows/Install-WixToolset.ps1 b/packaging/windows/Install-WixToolset.ps1
+new file mode 100644
+index 0000000..6b078b0
+--- /dev/null
++++ b/packaging/windows/Install-WixToolset.ps1
+@@ -0,0 +1,27 @@
++<#
++.SYNOPSIS
++    Installs the pinned WiX Toolset used by jpackage to build the MSI/EXE.
++
++.DESCRIPTION
++    Installs WiX as a global .NET tool (requires the .NET SDK 8 or newer) and adds the Util and UI
++    extensions that jpackage 25 needs. Re-running is safe. Open a new PowerShell window afterwards,
++    or keep using this one: %USERPROFILE%\.dotnet\tools is added to PATH for the current session.
++#>
++[CmdletBinding()]
++param([string]$Version = '5.0.2')
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++if (-not (Get-Command 'dotnet.exe' -ErrorAction SilentlyContinue)) {
++    throw 'The .NET SDK is required to install WiX. Install the .NET 8 SDK from https://dotnet.microsoft.com/download, then run this script again.'
++}
++$installed = (Invoke-Captured 'dotnet.exe' @('tool', 'list', '--global')).Output | Where-Object { $_ -match '^\s*wix\s' }
++if ($installed) { Invoke-Checked 'dotnet.exe' @('tool', 'update', '--global', 'wix', '--version', $Version) "Update WiX to $Version" }
++else { Invoke-Checked 'dotnet.exe' @('tool', 'install', '--global', 'wix', '--version', $Version) "Install WiX $Version" }
++
++$tools = Join-Path $env:USERPROFILE '.dotnet\tools'
++if (($env:PATH -split ';') -notcontains $tools) { $env:PATH = "$tools;$env:PATH" }
++foreach ($extension in 'WixToolset.Util.wixext', 'WixToolset.UI.wixext') {
++    Invoke-Checked (Join-Path $tools 'wix.exe') @('extension', 'add', '--global', "$extension/$Version") "Add $extension $Version"
++}
++Write-Host "Ready: $(Get-WixToolset)" -ForegroundColor Green
+diff --git a/packaging/windows/Invoke-ReleaseValidation.ps1 b/packaging/windows/Invoke-ReleaseValidation.ps1
+new file mode 100644
+index 0000000..f237edb
+--- /dev/null
++++ b/packaging/windows/Invoke-ReleaseValidation.ps1
+@@ -0,0 +1,164 @@
++<#
++.SYNOPSIS
++    One-command release validation: all automated tests, installer build, app smoke test, and an elevated
++    install / upgrade / downgrade-refusal / uninstall cycle. Results go to packaging\target\release-validation.
++
++.DESCRIPTION
++    Steps (each is recorded as PASS, FAIL or SKIPPED in summary.md and summary.json):
++      1. Toolchain: JDK 25 (JAVA_HOME, or the newest C:\Program Files\Eclipse Adoptium\jdk-25*),
++         WiX Toolset (installed with Install-WixToolset.ps1 when the .NET SDK is available).
++      2. Build-Installer.ps1: mvnw.cmd clean verify (every automated test), jlink, jpackage app image,
++         smoke test, MSI, checksums. Surefire results are summarised per module.
++      3. A second MSI with the next patch version, used only to test upgrading in place.
++      4. Test-Installer.ps1 in an elevated window (Windows asks for permission). It uses a temporary
++         LOCALAPPDATA, so your real application data is not touched, and it uninstalls at the end.
++    Use -SkipInstallerLifecycle to skip step 4.
++
++.EXAMPLE
++    powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\windows\Invoke-ReleaseValidation.ps1
++#>
++[CmdletBinding()]
++param(
++    [switch]$SkipInstallerLifecycle,
++    [switch]$Offline
++)
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++Assert-WindowsX64
++$root = Get-RepositoryRoot
++$settings = Get-InstallerSettings $root
++# packaging\target is removed by "mvnw clean"; collect results in a temporary folder until the end.
++$staging = New-EmptyDirectory (Join-Path ([IO.Path]::GetTempPath()) ('api-testing-platform-validation-' + [guid]::NewGuid().ToString('N')))
++$steps = New-Object System.Collections.Generic.List[object]
++function Add-Step([string]$Name, [string]$State, [string]$Detail) {
++    $steps.Add([pscustomobject]@{ Step = $Name; Result = $State; Detail = $Detail })
++    $color = @{ PASS = 'Green'; FAIL = 'Red'; SKIPPED = 'Yellow' }[$State]
++    Write-Host ("[{0}] {1} - {2}" -f $State, $Name, $Detail) -ForegroundColor $color
++}
++function Invoke-LoggedScript([string]$Script, [string[]]$Arguments, [string]$Log) {
++    $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
++    try {
++        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Script @Arguments 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log | Out-Host
++        return $LASTEXITCODE
++    } finally { $ErrorActionPreference = $previous }
++}
++
++# 1. Toolchain ---------------------------------------------------------------------------------------
++$javaHome = $env:JAVA_HOME
++$jdk = $null
++try { $jdk = Get-Jdk $javaHome } catch {
++    $candidate = Get-ChildItem -Path "$env:ProgramFiles\Eclipse Adoptium" -Directory -Filter 'jdk-25*' -ErrorAction SilentlyContinue |
++        Sort-Object Name -Descending | Select-Object -First 1
++    if ($null -eq $candidate) { throw "JDK 25 not found. $($_.Exception.Message)" }
++    $javaHome = $candidate.FullName
++    $jdk = Get-Jdk $javaHome
++}
++$env:JAVA_HOME = $jdk.Home
++Add-Step 'JDK' 'PASS' "$($jdk.Vendor) $($jdk.Version) at $($jdk.Home)"
++$wix = $null
++try { $wix = Get-WixToolset } catch {
++    if (Get-Command 'dotnet.exe' -ErrorAction SilentlyContinue) {
++        $code = Invoke-LoggedScript (Join-Path $PSScriptRoot 'Install-WixToolset.ps1') @() (Join-Path $staging 'wix-install.log')
++        if ($code -eq 0) { try { $wix = Get-WixToolset } catch { } }
++    }
++}
++if ($wix) { Add-Step 'WiX Toolset' 'PASS' $wix }
++else { Add-Step 'WiX Toolset' 'FAIL' 'Not available; only the app image can be built. Install the .NET 8 SDK, then run Install-WixToolset.ps1.' }
++
++# 2. Tests, app image, smoke test and installer --------------------------------------------------------
++$build = @('-JavaHome', $jdk.Home)
++if ($Offline) { $build += '-Offline' }
++if (-not $wix) { $build += '-AppImageOnly' }
++$code = Invoke-LoggedScript (Join-Path $PSScriptRoot 'Build-Installer.ps1') $build (Join-Path $staging 'build-installer.log')
++
++$modules = @()
++foreach ($report in Get-ChildItem -Path $root -Recurse -Filter 'TEST-*.xml' -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\target\\surefire-reports\\' }) {
++    [xml]$suite = Get-Content -LiteralPath $report.FullName -Raw
++    $module = ($report.FullName.Substring($root.Length + 1) -split '\\')[0]
++    $suiteNode = $suite.DocumentElement
++    $failed = @($suiteNode.SelectNodes('testcase') | Where-Object { $_.SelectSingleNode('failure|error') } | ForEach-Object {
++            $problem = $_.SelectSingleNode('failure|error')
++            $message = "$($problem.GetAttribute('message'))"
++            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
++            "$($_.GetAttribute('classname')).$($_.GetAttribute('name')): $message" })
++    $modules += [pscustomobject]@{ Module = $module; Tests = [int]$suiteNode.GetAttribute('tests'); Failures = [int]$suiteNode.GetAttribute('failures')
++        Errors = [int]$suiteNode.GetAttribute('errors'); Skipped = [int]$suiteNode.GetAttribute('skipped'); FailedCases = $failed }
++}
++$byModule = @($modules | Group-Object Module | ForEach-Object {
++        [pscustomobject]@{ Module = $_.Name; Tests = ($_.Group | Measure-Object Tests -Sum).Sum; Failures = ($_.Group | Measure-Object Failures -Sum).Sum
++            Errors = ($_.Group | Measure-Object Errors -Sum).Sum; Skipped = ($_.Group | Measure-Object Skipped -Sum).Sum
++            FailedCases = @($_.Group | ForEach-Object { $_.FailedCases }) } })
++$total = ($byModule | Measure-Object Tests -Sum).Sum
++$broken = ($byModule | Measure-Object Failures -Sum).Sum + ($byModule | Measure-Object Errors -Sum).Sum
++$skipped = ($byModule | Measure-Object Skipped -Sum).Sum
++if ($total -gt 0 -and $broken -eq 0) { Add-Step 'Automated tests (mvnw clean verify)' 'PASS' "$total tests, $skipped skipped, 0 failures/errors" }
++else { Add-Step 'Automated tests (mvnw clean verify)' 'FAIL' "$total tests, $broken failures/errors, $skipped skipped" }
++
++$installerName = "$($settings.Name)-$(ConvertTo-InstallerVersion $settings.ProjectVersion).msi"
++$installer = Join-Path $root "dist\$installerName"
++if ($code -eq 0) {
++    if ($wix) { Add-Step 'Build, app smoke test and MSI' 'PASS' "dist\$installerName" }
++    else { Add-Step 'Build and app smoke test' 'PASS' 'App image only (no WiX)' }
++} else { Add-Step 'Build-Installer.ps1' 'FAIL' "exit code $code; see build-installer.log" }
++
++# 3. Next patch version for the upgrade test -----------------------------------------------------------
++$upgrade = $null
++if ($code -eq 0 -and $wix) {
++    $parts = (ConvertTo-InstallerVersion $settings.ProjectVersion) -split '\.'
++    $next = '{0}.{1}.{2}' -f $parts[0], $parts[1], ([int]$parts[2] + 1)
++    $upgradeFolder = Join-Path $staging 'upgrade-test'
++    $upgradeCode = Invoke-LoggedScript (Join-Path $PSScriptRoot 'Build-Installer.ps1') @('-JavaHome', $jdk.Home, '-SkipMavenBuild', '-SkipSmokeTest', '-AppVersion', $next, '-Destination', $upgradeFolder) (Join-Path $staging 'build-upgrade-test.log')
++    $upgrade = Join-Path $upgradeFolder "$($settings.Name)-$next.msi"
++    if ($upgradeCode -eq 0 -and (Test-Path -LiteralPath $upgrade)) { Add-Step 'Upgrade-test MSI' 'PASS' "$next (same code, higher version)" }
++    else { Add-Step 'Upgrade-test MSI' 'FAIL' "exit code $upgradeCode"; $upgrade = $null }
++}
++
++# 4. Elevated install / upgrade / uninstall --------------------------------------------------------------
++if ($SkipInstallerLifecycle) { Add-Step 'Installer lifecycle' 'SKIPPED' '-SkipInstallerLifecycle' }
++elseif (-not (Test-Path -LiteralPath $installer)) { Add-Step 'Installer lifecycle' 'SKIPPED' 'No MSI was built' }
++else {
++    $lifecycle = Join-Path $staging 'installer-validation'
++    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'Test-Installer.ps1')`" -Msi `"$installer`" -LogDirectory `"$lifecycle`""
++    if ($upgrade) { $arguments += " -UpgradeMsi `"$upgrade`"" }
++    try {
++        Write-Host 'Windows will ask for administrator permission to install and uninstall the MSI.' -ForegroundColor Yellow
++        $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -Wait -PassThru
++        $report = Join-Path $lifecycle 'installer-validation.md'
++        $passedChecks = 0; $allChecks = 0
++        if (Test-Path -LiteralPath (Join-Path $lifecycle 'installer-validation.json')) {
++            $json = Get-Content -LiteralPath (Join-Path $lifecycle 'installer-validation.json') -Raw | ConvertFrom-Json
++            $allChecks = @($json.checks).Count; $passedChecks = @($json.checks | Where-Object { $_.Passed }).Count
++        }
++        if ($process.ExitCode -eq 0 -and $allChecks -gt 0) { Add-Step 'Installer lifecycle' 'PASS' "$passedChecks/$allChecks checks; see installer-validation\installer-validation.md" }
++        else { Add-Step 'Installer lifecycle' 'FAIL' "exit code $($process.ExitCode); $passedChecks/$allChecks checks passed" }
++    } catch { Add-Step 'Installer lifecycle' 'SKIPPED' "Not run: $($_.Exception.Message)" }
++}
++
++# Summary ----------------------------------------------------------------------------------------------
++$summary = [ordered]@{
++    testedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
++    windows     = [Environment]::OSVersion.VersionString
++    computer    = "$((Get-CimInstance Win32_Processor | Select-Object -First 1).Name), $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)) GB RAM"
++    steps       = $steps
++    tests       = $byModule
++}
++$summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $staging 'summary.json') -Encoding UTF8
++$markdown = @('| Step | Result | Detail |', '| --- | --- | --- |') + @($steps | ForEach-Object { '| {0} | {1} | {2} |' -f $_.Step, $_.Result, ($_.Detail -replace '\|', '/') })
++$markdown += @('', '| Module | Tests | Failures | Errors | Skipped |', '| --- | ---: | ---: | ---: | ---: |')
++$markdown += @($byModule | ForEach-Object { '| {0} | {1} | {2} | {3} | {4} |' -f $_.Module, $_.Tests, $_.Failures, $_.Errors, $_.Skipped })
++$failedCases = @($byModule | ForEach-Object { $_.FailedCases } | Where-Object { $_ })
++if ($failedCases.Count -gt 0) { $markdown += @('', 'Failed tests:', '') + @($failedCases | ForEach-Object { "- $_" }) }
++$markdown | Set-Content -LiteralPath (Join-Path $staging 'summary.md') -Encoding UTF8
++
++$results = New-EmptyDirectory (Join-Path $root 'packaging\target\release-validation')
++Copy-Item -Path (Join-Path $staging '*') -Destination $results -Recurse -Force
++foreach ($extra in 'dist\SHA256SUMS.txt', "dist\$($settings.Name)-$(ConvertTo-InstallerVersion $settings.ProjectVersion).build-info.json") {
++    if (Test-Path -LiteralPath (Join-Path $root $extra)) { Copy-Item -LiteralPath (Join-Path $root $extra) -Destination $results }
++}
++Remove-Item -LiteralPath (Join-Path $results 'upgrade-test') -Recurse -Force -ErrorAction SilentlyContinue
++Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
++Write-Host ''
++$markdown | ForEach-Object { Write-Host $_ }
++Write-Host "`nResults: $results" -ForegroundColor Cyan
++if (@($steps | Where-Object { $_.Result -eq 'FAIL' }).Count -gt 0) { exit 1 }
+diff --git a/packaging/windows/Start-SandboxValidation.ps1 b/packaging/windows/Start-SandboxValidation.ps1
+new file mode 100644
+index 0000000..f7f8900
+--- /dev/null
++++ b/packaging/windows/Start-SandboxValidation.ps1
+@@ -0,0 +1,45 @@
++<#
++.SYNOPSIS
++    Runs Test-Installer.ps1 inside a fresh Windows Sandbox: a clean, disposable Windows with no Java.
++
++.DESCRIPTION
++    Requires Windows 10/11 Pro, Enterprise or Education with the "Windows Sandbox" feature enabled and
++    hardware virtualization turned on in the BIOS/UEFI. The repository is mapped read-only; results are
++    written to packaging\target\sandbox-validation on the host. Close the sandbox when the PowerShell
++    window inside it reports the result; everything inside the sandbox is discarded.
++#>
++[CmdletBinding()]
++param(
++    [Parameter(Mandatory = $true)][string]$Msi,
++    [string]$UpgradeMsi
++)
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++$root = Get-RepositoryRoot
++$sandbox = Join-Path $env:WINDIR 'System32\WindowsSandbox.exe'
++if (-not (Test-Path -LiteralPath $sandbox)) { throw 'Windows Sandbox is not enabled. Enable it in "Turn Windows features on or off", or validate on a clean VM.' }
++$results = (New-Item -ItemType Directory -Path (Join-Path $root 'packaging\target\sandbox-validation') -Force).FullName
++
++function Get-SandboxPath([string]$Path) {
++    $full = (Resolve-Path -LiteralPath $Path).Path
++    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw "$Path must be inside the repository (for example dist\)." }
++    return 'C:\Validation\repo' + $full.Substring($root.Length)
++}
++$arguments = "-Msi `"$(Get-SandboxPath $Msi)`""
++if ($UpgradeMsi) { $arguments += " -UpgradeMsi `"$(Get-SandboxPath $UpgradeMsi)`"" }
++$command = "powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -File C:\Validation\repo\packaging\windows\Test-Installer.ps1 $arguments -LogDirectory C:\Validation\results"
++
++$configuration = Join-Path $results 'installer-validation.wsb'
++@"
++<Configuration>
++  <Networking>Disable</Networking>
++  <MappedFolders>
++    <MappedFolder><HostFolder>$([Security.SecurityElement]::Escape($root))</HostFolder><SandboxFolder>C:\Validation\repo</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
++    <MappedFolder><HostFolder>$([Security.SecurityElement]::Escape($results))</HostFolder><SandboxFolder>C:\Validation\results</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
++  </MappedFolders>
++  <LogonCommand><Command>$([Security.SecurityElement]::Escape($command))</Command></LogonCommand>
++</Configuration>
++"@ | Set-Content -LiteralPath $configuration -Encoding UTF8
++Start-Process -FilePath $configuration
++Write-Host "Windows Sandbox started. Results will appear in $results"
+diff --git a/packaging/windows/Test-AppImage.ps1 b/packaging/windows/Test-AppImage.ps1
+new file mode 100644
+index 0000000..66428ac
+--- /dev/null
++++ b/packaging/windows/Test-AppImage.ps1
+@@ -0,0 +1,114 @@
++<#
++.SYNOPSIS
++    Starts a packaged or installed API Testing Platform launcher once and checks where it writes.
++
++.DESCRIPTION
++    The launcher runs with a temporary LOCALAPPDATA, without JAVA_HOME and with Java removed from PATH,
++    so it must use its bundled runtime. The built-in startup probe (platform.startup.measurement) records
++    when the window is ready and closes the application normally. The check fails unless:
++      - the process exits with code 0 after the window was ready;
++      - the database, logs and the versioned native cache are created below LOCALAPPDATA;
++      - nothing in the installation directory is created or changed.
++    Returns a summary object. Your real data in %LOCALAPPDATA%\API Testing Platform is never used.
++#>
++[CmdletBinding()]
++param(
++    [Parameter(Mandatory = $true)][string]$Launcher,
++    [string]$ExpectedVersion,
++    # Use (and keep) this LOCALAPPDATA instead of a temporary one, e.g. to test data across upgrades.
++    [string]$LocalAppData,
++    [int]$TimeoutSeconds = 90
++)
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++$Launcher = (Resolve-Path -LiteralPath $Launcher).Path
++$installation = Split-Path -Parent $Launcher
++$work = New-EmptyDirectory (Join-Path ([IO.Path]::GetTempPath()) ('api-testing-platform-smoke-' + [guid]::NewGuid().ToString('N')))
++$temporaryData = [string]::IsNullOrWhiteSpace($LocalAppData)
++if ($temporaryData) { $LocalAppData = Join-Path $work 'LocalAppData' }
++New-Item -ItemType Directory -Path $LocalAppData -Force | Out-Null
++$LocalAppData = (Resolve-Path -LiteralPath $LocalAppData).Path
++$data = Join-Path $LocalAppData 'API Testing Platform'
++$measurement = Join-Path $work 'startup.properties'
++
++function Get-Snapshot([string]$Folder) {
++    return @(Get-ChildItem -LiteralPath $Folder -Recurse -Force -File | ForEach-Object {
++            '{0}|{1}|{2}' -f $_.FullName.Substring($Folder.Length), $_.Length, $_.LastWriteTimeUtc.Ticks
++        } | Sort-Object)
++}
++$before = Get-Snapshot $installation
++
++$saved = @{ LOCALAPPDATA = $env:LOCALAPPDATA; JAVA_TOOL_OPTIONS = $env:JAVA_TOOL_OPTIONS; JAVA_HOME = $env:JAVA_HOME; PATH = $env:PATH }
++$process = $null
++$timer = [Diagnostics.Stopwatch]::StartNew()
++try {
++    $env:LOCALAPPDATA = $LocalAppData
++    $env:JAVA_TOOL_OPTIONS = '"-Dplatform.startup.measurement=' + $measurement.Replace('\', '/') + '" -Dplatform.startup.autoExit=true'
++    Remove-Item Env:\JAVA_HOME -ErrorAction SilentlyContinue
++    $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and $_ -notmatch '(?i)(java|jdk|jre|adoptium|zulu|corretto)' }) -join ';'
++    $process = Start-Process -FilePath $Launcher -PassThru -WorkingDirectory $work `
++        -RedirectStandardOutput (Join-Path $work 'stdout.log') -RedirectStandardError (Join-Path $work 'stderr.log')
++    $null = $process.Handle   # caches the handle so ExitCode is available after the process ends
++    while (-not (Test-Path -LiteralPath $measurement) -and -not $process.HasExited -and $timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
++        Start-Sleep -Milliseconds 200
++    }
++    $readyMs = $timer.ElapsedMilliseconds
++    if (-not $process.WaitForExit(30000)) {
++        Stop-Process -Id $process.Id -Force
++        throw 'The application did not close within 30 seconds after the startup probe.'
++    }
++    $exitCode = $process.ExitCode
++} finally {
++    foreach ($name in $saved.Keys) {
++        if ($null -eq $saved[$name]) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
++        else { Set-Item "Env:\$name" $saved[$name] }
++    }
++}
++
++$failures = New-Object System.Collections.Generic.List[string]
++if (-not (Test-Path -LiteralPath $measurement)) { $failures.Add("The window did not become ready within $TimeoutSeconds seconds.") }
++if ($exitCode -ne 0) { $failures.Add("The application exited with code $exitCode.") }
++if (-not (Test-Path -LiteralPath (Join-Path $data 'platform.sqlite'))) { $failures.Add("No database was created in $data.") }
++if (-not (Get-ChildItem -LiteralPath (Join-Path $data 'logs') -File -ErrorAction SilentlyContinue)) { $failures.Add('No structured log was written below LOCALAPPDATA.') }
++$cacheVersion = $ExpectedVersion
++if ([string]::IsNullOrWhiteSpace($cacheVersion)) { $cacheVersion = '*' }
++$javafxCache = @(Get-ChildItem -Path (Join-Path $data "cache\$cacheVersion\openjfx") -Recurse -File -Filter '*.dll' -ErrorAction SilentlyContinue)
++if ($javafxCache.Count -eq 0) { $failures.Add("JavaFX native libraries were not cached below $data\cache\$cacheVersion.") }
++$after = Get-Snapshot $installation
++$changed = @(Compare-Object $before $after | ForEach-Object { ($_.InputObject -split '\|')[0] })
++if ($changed.Count -gt 0) { $failures.Add("Files changed in the installation directory: $($changed -join ', ')") }
++$runtimeRelease = Join-Path $installation 'runtime\release'
++$bundledJava = ''
++if (Test-Path -LiteralPath $runtimeRelease) {
++    $bundledJava = ((Get-Content -LiteralPath $runtimeRelease | Where-Object { $_ -match '^JAVA_VERSION=' }) -replace '^JAVA_VERSION="?|"$', '')
++}
++if ($bundledJava -notmatch '^25(\.|$)') { $failures.Add("The bundled runtime does not report Java 25 ($runtimeRelease).") }
++
++$probe = @{}
++if (Test-Path -LiteralPath $measurement) {
++    Get-Content -LiteralPath $measurement | Where-Object { $_ -match '^[a-zA-Z]+=' } | ForEach-Object {
++        $pair = $_ -split '=', 2; $probe[$pair[0]] = $pair[1]
++    }
++}
++$result = [ordered]@{
++    launcher            = $Launcher
++    passed              = ($failures.Count -eq 0)
++    exitCode            = $exitCode
++    launchToReadyMs     = $readyMs
++    jvmToReadyMs        = $probe['jvmToReadyMs']
++    usedHeapMiB         = $probe['usedHeapMiB']
++    bundledJava         = $bundledJava
++    javafxCachedLibrary = ($javafxCache | Select-Object -First 1 | ForEach-Object { $_.FullName.Substring($LocalAppData.Length) })
++    failures            = @($failures)
++}
++if ($failures.Count -gt 0) {
++    $stderr = Join-Path $work 'stderr.log'
++    $tail = ''
++    if (Test-Path -LiteralPath $stderr) { $tail = (Get-Content -LiteralPath $stderr -Tail 40) -join "`n" }
++    throw ("Smoke test failed for $Launcher`n - " + ($failures -join "`n - ") + "`nLauncher stderr (last lines):`n$tail`nWork folder kept: $work")
++}
++Write-Host "Smoke test passed: ready after $readyMs ms, Java $bundledJava, data and caches below LOCALAPPDATA only." -ForegroundColor Green
++# A caller-supplied LOCALAPPDATA lives outside the work folder and is kept.
++Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
++return [pscustomobject]$result
+diff --git a/packaging/windows/Test-Installer.ps1 b/packaging/windows/Test-Installer.ps1
+new file mode 100644
+index 0000000..042cdc8
+--- /dev/null
++++ b/packaging/windows/Test-Installer.ps1
+@@ -0,0 +1,172 @@
++<#
++.SYNOPSIS
++    Validates install, upgrade, downgrade protection and uninstall of the MSI on a clean Windows machine.
++
++.DESCRIPTION
++    Run elevated on a clean Windows 10/11 x64 machine, VM or Windows Sandbox where API Testing Platform
++    is not installed (see Start-SandboxValidation.ps1). Uses a dedicated temporary LOCALAPPDATA for the
++    application data, so an existing user's data is never touched. Steps:
++      1. Silent install of -Msi; checks registration, upgrade code, files, shortcuts and bundled Java.
++      2. Launches the installed app without any Java on PATH (Test-AppImage.ps1) and adds a data marker.
++      3. Optional: installs -UpgradeMsi over it; checks one registration, new version, data preserved,
++         launches again; then verifies the older MSI is refused (no downgrade).
++      4. Silent uninstall; checks program files and shortcuts are removed and the user data is preserved.
++    Writes installer-validation.json and installer-validation.md plus verbose msiexec logs to -LogDirectory.
++    Exit code 0 only when every check passes.
++
++.EXAMPLE
++    .\packaging\windows\Test-Installer.ps1 -Msi "dist\API Testing Platform-0.1.0.msi" -UpgradeMsi "dist\API Testing Platform-0.1.1.msi"
++#>
++[CmdletBinding()]
++param(
++    [Parameter(Mandatory = $true)][string]$Msi,
++    [string]$UpgradeMsi,
++    [string]$LogDirectory,
++    [switch]$KeepInstalled
++)
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot 'Common.ps1')
++
++Assert-WindowsX64
++$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
++if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++    throw 'Run this validation from an elevated PowerShell: the MSI installs per machine into Program Files.'
++}
++$settings = Get-InstallerSettings (Get-RepositoryRoot)
++$Msi = (Resolve-Path -LiteralPath $Msi).Path
++if ($UpgradeMsi) { $UpgradeMsi = (Resolve-Path -LiteralPath $UpgradeMsi).Path }
++if ([string]::IsNullOrWhiteSpace($LogDirectory)) { $LogDirectory = Join-Path (Get-RepositoryRoot) 'packaging\target\installer-validation' }
++$LogDirectory = (New-Item -ItemType Directory -Path $LogDirectory -Force).FullName
++$localAppData = New-EmptyDirectory (Join-Path ([IO.Path]::GetTempPath()) ('api-testing-platform-installer-' + [guid]::NewGuid().ToString('N')))
++$data = Join-Path $localAppData 'API Testing Platform'
++$installDirectory = Join-Path $env:ProgramFiles $settings.Name
++$launcher = Join-Path $installDirectory "$($settings.Name).exe"
++$checks = New-Object System.Collections.Generic.List[object]
++
++function Add-Check([string]$Name, [bool]$Passed, [string]$Detail) {
++    $checks.Add([pscustomobject]@{ Check = $Name; Passed = $Passed; Detail = $Detail })
++    $color = 'Red'; $label = 'FAIL'
++    if ($Passed) { $color = 'Green'; $label = 'PASS' }
++    Write-Host ("[{0}] {1} - {2}" -f $label, $Name, $Detail) -ForegroundColor $color
++}
++
++function Get-MsiProperty([string]$Path, [string]$Property) {
++    $installer = New-Object -ComObject WindowsInstaller.Installer
++    $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
++    $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @("SELECT Value FROM Property WHERE Property = '$Property'"))
++    $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
++    $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
++    $value = $null
++    if ($null -ne $record) { $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1) }
++    $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null
++    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
++    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
++    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
++    return $value
++}
++
++function Get-Registrations {
++    $keys = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
++    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
++    return @(Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue | Where-Object {
++            $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq $settings.Name })
++}
++
++function Invoke-Msiexec([string[]]$Arguments, [string]$Log) {
++    $quoted = @($Arguments | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })
++    $quoted += @('/qn', '/norestart', '/l*v', ('"' + $Log + '"'))
++    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList ($quoted -join ' ') -Wait -PassThru
++    return $process.ExitCode
++}
++
++function Get-Shortcuts {
++    $menus = @((Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$($settings.Name)"),
++        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$($settings.Name)"))
++    return @($menus | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.lnk' } | ForEach-Object { $_.BaseName } | Sort-Object)
++}
++
++function Test-InstalledVersion([string]$Label, [string]$Version) {
++    $registrations = Get-Registrations
++    Add-Check "$Label registration" ($registrations.Count -eq 1) "$($registrations.Count) Apps & Features entry/entries"
++    if ($registrations.Count -ge 1) {
++        Add-Check "$Label version" ($registrations[0].DisplayVersion -eq $Version) "registered $($registrations[0].DisplayVersion), expected $Version"
++    }
++    Add-Check "$Label launcher" (Test-Path -LiteralPath $launcher) $launcher
++    Add-Check "$Label data-removal launcher" (Test-Path -LiteralPath (Join-Path $installDirectory "$($settings.RemoveLauncher).exe")) 'explicit user-data removal is available'
++    $mods = @(Get-ChildItem -LiteralPath (Join-Path $installDirectory 'app\mods') -Filter '*.jar' -ErrorAction SilentlyContinue)
++    Add-Check "$Label module path" ($mods.Count -gt 10) "$($mods.Count) jars in app\mods"
++    $shortcuts = Get-Shortcuts
++    Add-Check "$Label Start menu" (($shortcuts -contains $settings.Name) -and ($shortcuts -contains $settings.RemoveLauncher)) ("shortcuts: " + ($shortcuts -join ', '))
++    Add-Check "$Label data outside install directory" (-not (Test-Path -LiteralPath (Join-Path $installDirectory 'platform.sqlite'))) 'no database in Program Files'
++}
++
++function Invoke-Smoke([string]$Label, [string]$Version) {
++    try {
++        $smoke = & (Join-Path $PSScriptRoot 'Test-AppImage.ps1') -Launcher $launcher -ExpectedVersion $Version -LocalAppData $localAppData
++        Add-Check "$Label launch without system Java" $true ("ready after {0} ms, bundled Java {1}" -f $smoke.launchToReadyMs, $smoke.bundledJava)
++    } catch { Add-Check "$Label launch without system Java" $false $_.Exception.Message }
++}
++
++$version = Get-MsiProperty $Msi 'ProductVersion'
++$upgradeCode = Get-MsiProperty $Msi 'UpgradeCode'
++Add-Check 'Upgrade code' ($upgradeCode.Trim('{}') -eq $settings.UpgradeUuid) "$upgradeCode"
++$existing = Get-Registrations
++if ($existing.Count -gt 0) { throw "$($settings.Name) is already installed ($($existing[0].DisplayVersion)). Use a clean machine, VM or Windows Sandbox." }
++
++# 1-2. Install and launch.
++$code = Invoke-Msiexec @('/i', $Msi) (Join-Path $LogDirectory '1-install.log')
++Add-Check 'Install' ($code -in 0, 3010) "msiexec exit code $code"
++Test-InstalledVersion 'Install' $version
++Invoke-Smoke 'Install' $version
++$marker = Join-Path $data 'installer-validation-marker.txt'
++$token = [guid]::NewGuid().ToString()
++if (Test-Path -LiteralPath $data) { Set-Content -LiteralPath $marker -Value $token -Encoding ASCII }
++$database = Join-Path $data 'platform.sqlite'
++$created = $null
++if (Test-Path -LiteralPath $database) { $created = (Get-Item -LiteralPath $database).CreationTimeUtc }
++
++# 3. Upgrade in place and refuse downgrade.
++if ($UpgradeMsi) {
++    $newVersion = Get-MsiProperty $UpgradeMsi 'ProductVersion'
++    $code = Invoke-Msiexec @('/i', $UpgradeMsi) (Join-Path $LogDirectory '2-upgrade.log')
++    Add-Check 'Upgrade' ($code -in 0, 3010) "msiexec exit code $code ($version -> $newVersion)"
++    Test-InstalledVersion 'Upgrade' $newVersion
++    $kept = (Test-Path -LiteralPath $marker) -and ((Get-Content -LiteralPath $marker -Raw).Trim() -eq $token)
++    $sameDatabase = ($null -ne $created) -and (Test-Path -LiteralPath $database) -and ((Get-Item -LiteralPath $database).CreationTimeUtc -eq $created)
++    Add-Check 'Upgrade keeps user data' ($kept -and $sameDatabase) 'marker and original database file still present'
++    Invoke-Smoke 'Upgrade' $newVersion
++    Add-Check 'Upgrade clears old native cache' (-not (Test-Path -LiteralPath (Join-Path $data "cache\$version"))) "cache\$version removed at next start"
++    $code = Invoke-Msiexec @('/i', $Msi) (Join-Path $LogDirectory '3-downgrade.log')
++    $registrations = Get-Registrations
++    $stillNew = ($registrations.Count -eq 1) -and ($registrations[0].DisplayVersion -eq $newVersion)
++    Add-Check 'Downgrade refused' (($code -ne 0) -and $stillNew) "msiexec exit code $code, installed version stays $newVersion"
++}
++
++# 4. Uninstall, keeping user data.
++if (-not $KeepInstalled) {
++    $registrations = Get-Registrations
++    if ($registrations.Count -ge 1) {
++        $code = Invoke-Msiexec @('/x', $registrations[0].PSChildName) (Join-Path $LogDirectory '4-uninstall.log')
++        Add-Check 'Uninstall' ($code -in 0, 3010) "msiexec exit code $code"
++    }
++    Add-Check 'Uninstall registration removed' ((Get-Registrations).Count -eq 0) 'no Apps & Features entry'
++    Add-Check 'Uninstall removes program files' (-not (Test-Path -LiteralPath $launcher)) $installDirectory
++    Add-Check 'Uninstall removes shortcuts' ((Get-Shortcuts).Count -eq 0) 'Start menu folder empty or removed'
++    $kept = (Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $database)
++    Add-Check 'Uninstall preserves user data' $kept $data
++}
++
++$failed = @($checks | Where-Object { -not $_.Passed })
++$report = [ordered]@{
++    application = $settings.Name; installer = (Split-Path -Leaf $Msi); upgradeInstaller = $UpgradeMsi
++    windows = [Environment]::OSVersion.VersionString; testedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
++    passed = ($failed.Count -eq 0); checks = $checks
++}
++$report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $LogDirectory 'installer-validation.json') -Encoding UTF8
++$markdown = @('| Check | Result | Detail |', '| --- | --- | --- |') + @($checks | ForEach-Object {
++        $state = 'FAIL'; if ($_.Passed) { $state = 'PASS' }
++        '| {0} | {1} | {2} |' -f $_.Check, $state, ($_.Detail -replace '\|', '/') })
++$markdown | Set-Content -LiteralPath (Join-Path $LogDirectory 'installer-validation.md') -Encoding UTF8
++Remove-Item -LiteralPath $localAppData -Recurse -Force -ErrorAction SilentlyContinue
++Write-Host ("{0} of {1} checks passed. Logs: {2}" -f ($checks.Count - $failed.Count), $checks.Count, $LogDirectory)
++if ($failed.Count -gt 0) { exit 1 }
+diff --git a/packaging/windows/app.ico b/packaging/windows/app.ico
+new file mode 100644
+index 0000000000000000000000000000000000000000..a120191dfd68abe77a356835e628a1f58bf17749
+GIT binary patch
+literal 34196
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/packaging/windows/runtime-modules.txt b/packaging/windows/runtime-modules.txt
+new file mode 100644
+index 0000000..218d2ba
+--- /dev/null
++++ b/packaging/windows/runtime-modules.txt
+@@ -0,0 +1,25 @@
++# JDK modules linked into the bundled Java runtime by jlink.
++# Application, JavaFX and library jars are NOT linked here: several libraries are automatic modules,
++# which jlink cannot link, so jpackage places them on the installed module path instead (app\mods).
++# Build-Installer.ps1 also runs jdeps and adds anything detected but missing here, with a warning.
++java.base
++# JavaFX base/graphics and java.awt.Desktop ("Open Logs Folder")
++java.desktop
++java.logging
++# StartupProbe uptime and memory measurement
++java.management
++# Logback/JNDI lookups and DNS name resolution helpers
++java.naming
++java.net.http
++java.sql
++java.xml
++# Non-UTF response charsets such as windows-1251, Shift_JIS and GB18030
++jdk.charsets
++jdk.crypto.ec
++# Windows certificate stores (Windows-ROOT / Windows-MY) for users who select them via JVM options
++jdk.crypto.mscapi
++# Locale data for non-English Windows date and number formatting
++jdk.localedata
++# sun.misc.Unsafe users (JavaFX, JNA, Jackson)
++jdk.unsupported
++jdk.zipfs
+diff --git a/pom.xml b/pom.xml
+index 8e03cb5..3de2235 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -44,6 +44,7 @@
+         <maven.surefire.plugin.version>3.5.4</maven.surefire.plugin.version>
+         <maven.enforcer.plugin.version>3.6.2</maven.enforcer.plugin.version>
+         <javafx.maven.plugin.version>0.0.8</javafx.maven.plugin.version>
++        <maven.dependency.plugin.version>3.8.1</maven.dependency.plugin.version>
+     </properties>
+ 
+     <dependencyManagement>
+@@ -83,6 +84,11 @@
+                 <artifactId>ui</artifactId>
+                 <version>${project.version}</version>
+             </dependency>
++            <dependency>
++                <groupId>dev.apitestingplatform</groupId>
++                <artifactId>app</artifactId>
++                <version>${project.version}</version>
++            </dependency>
+             <dependency>
+                 <groupId>org.openjfx</groupId>
+                 <artifactId>javafx-controls</artifactId>
+@@ -177,6 +183,11 @@
+                     <artifactId>javafx-maven-plugin</artifactId>
+                     <version>${javafx.maven.plugin.version}</version>
+                 </plugin>
++                <plugin>
++                    <groupId>org.apache.maven.plugins</groupId>
++                    <artifactId>maven-dependency-plugin</artifactId>
++                    <version>${maven.dependency.plugin.version}</version>
++                </plugin>
+             </plugins>
+         </pluginManagement>
+ 
+-- 
+2.43.0
+

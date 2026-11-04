@@ -61,7 +61,8 @@
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>dev.apitestingplatform.app/dev.apitestingplatform.app.ApiTestingPlatformApplication</mainClass>
+                    <!-- Same entry point as the installed launcher: native caches go below %LOCALAPPDATA%. -->
+                    <mainClass>dev.apitestingplatform.app/dev.apitestingplatform.app.Main</mainClass>
                     <options>
                         <option>--enable-native-access=javafx.graphics,org.xerial.sqlitejdbc,com.sun.jna</option>
                     </options>

@@ -2,7 +2,7 @@
 
 API Testing Platform is a local Windows desktop application for creating, organizing, and testing HTTP APIs. The application is designed for Windows 10 and Windows 11 and keeps its application data on the local computer.
 
-Steps 4–18 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports, portable workspace import/export, operational settings, database backup/restore and safe diagnostics. Performance and failure recovery have measured workloads. Windows installation and release delivery remain steps 19–20.
+Steps 4–18 are implemented: the JavaFX workspace includes a complete request editor, asynchronous HTTP execution, a response viewer, SQLite-backed workspaces/collections/requests, protected crash-recovery drafts, environments, variable resolution, authentication helpers, declarative assertions, response extraction, sequential collection runs, persistent history with sanitized reports, portable workspace import/export, operational settings, database backup/restore and safe diagnostics. Performance and failure recovery have measured workloads. Step 19 packages the app as a Windows MSI with a bundled Java runtime; step 20 provides the release validation run.
 
 ## Module structure
 
@@ -43,7 +43,18 @@ Install the reactor artifacts locally, then launch the `app` module:
 .\mvnw.cmd -f app\pom.xml javafx:run
 ```
 
-The development build requires Java 25. A future packaging increment will use `jlink` and `jpackage` so installed users do not need a separate Java installation.
+The development build requires Java 25. `javafx:run` uses the same entry point as the installed launcher (`dev.apitestingplatform.app.Main`).
+
+## Install on Windows
+
+The MSI from `packaging\windows\Build-Installer.ps1` installs into `C:\Program Files\API Testing Platform` with its own Java 25 runtime; no JDK, JRE, server or service is needed on the user's computer. Data, backups, logs, settings and native-library caches stay in `%LOCALAPPDATA%\API Testing Platform`, outside the installation folder. Installing a newer version upgrades in place and keeps that data; uninstalling also keeps it. To delete it, run **Start → API Testing Platform → Remove API Testing Platform Data** and confirm.
+
+```powershell
+.\packaging\windows\Install-WixToolset.ps1      # once per build machine (.NET 8 SDK required)
+.\packaging\windows\Build-Installer.ps1         # dist\API Testing Platform-<version>.msi
+```
+
+Building, release steps and the installer validation checklist: [packaging/README.md](packaging/README.md), [release checklist](docs/release-checklist.md), [Step 19 packaging](docs/step-19-packaging.md) and [Step 20 release validation](docs/step-20-release-validation.md).
 
 ## Finding your way around
 

@@ -22,9 +22,22 @@ final class FxTestSupport {
     static <T> T fx(Callable<T> action) throws Exception {
         FutureTask<T> task = new FutureTask<>(action); Platform.runLater(task); return task.get(10, TimeUnit.SECONDS);
     }
+    /**
+     * Polls on the FX thread. Nodes inside a newly shown SplitPane/TabPane exist only after the next CSS pass,
+     * so a lookup that is still null counts as "not ready yet" instead of failing the test immediately.
+     */
     static void waitFor(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (System.nanoTime() < deadline) { if (fx(condition::getAsBoolean)) return; Thread.sleep(20); }
+        Throwable last = null;
+        while (System.nanoTime() < deadline) {
+            try { if (fx(condition::getAsBoolean)) return; last = null; }
+            catch (ExecutionException notReady) {
+                if (!(notReady.getCause() instanceof NullPointerException)) throw notReady;
+                last = notReady.getCause();
+            }
+            Thread.sleep(20);
+        }
+        if (last != null) throw new AssertionError("UI did not reach expected state", last);
         fail("UI did not reach expected state");
     }
     /** Invoke a visible command or an action moved into a named menu. FX thread only. */

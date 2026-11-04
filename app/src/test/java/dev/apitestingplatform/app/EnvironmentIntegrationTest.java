@@ -89,6 +89,8 @@ class EnvironmentIntegrationTest {
             waitFor(() -> fixture.selector().getItems().size() == 3);
             fx(() -> { fixture.controller.openRequest(saved.item().id()); return null; });
             waitFor(() -> fixture.controller.activeEditor().requestEditorModel().variables.size() == 1);
+            // The new tab's SplitPane exposes its children only after the next CSS pass.
+            waitFor(() -> fixture.button("request-preview-target") != null);
             fx(() -> { fixture.button("request-preview-target").fire(); return null; });
             waitFor(() -> fixture.label("request-resolved-target").getText().startsWith("Target:"));
             fx(() -> {

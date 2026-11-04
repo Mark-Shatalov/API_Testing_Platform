@@ -1,0 +1,27 @@
+# JDK modules linked into the bundled Java runtime by jlink.
+# Application, JavaFX and library jars are NOT linked here: several libraries are automatic modules,
+# which jlink cannot link, so jpackage places them on the installed module path instead (app\mods).
+# Build-Installer.ps1 also runs jdeps and adds anything detected but missing here, with a warning.
+java.base
+# JavaFX base/graphics and java.awt.Desktop ("Open Logs Folder")
+java.desktop
+java.logging
+# StartupProbe uptime and memory measurement
+java.management
+# Logback/JNDI lookups and DNS name resolution helpers
+java.naming
+java.net.http
+java.sql
+# Declared (non-static) by sqlite-jdbc's module descriptor; without it the boot layer fails
+java.sql.rowset
+java.xml
+# Non-UTF response charsets such as windows-1251, Shift_JIS and GB18030
+jdk.charsets
+jdk.crypto.ec
+# Windows certificate stores (Windows-ROOT / Windows-MY) for users who select them via JVM options
+jdk.crypto.mscapi
+# Locale data for non-English Windows date and number formatting
+jdk.localedata
+# sun.misc.Unsafe users (JavaFX, JNA, Jackson)
+jdk.unsupported
+jdk.zipfs

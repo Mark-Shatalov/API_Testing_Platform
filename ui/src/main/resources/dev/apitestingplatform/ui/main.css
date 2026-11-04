@@ -217,6 +217,8 @@
 .empty-state-compact .empty-state-title { -fx-font-size: 12px; }
 .empty-state-compact .empty-state-description { -fx-font-size: 11px; }
 .empty-state-compact .empty-state-icon { -fx-background-color: transparent; }
+/* The response placeholder must fit the 1050x700 minimum window at any font metrics. */
+.response-panel .empty-state { -fx-padding: 8px 16px; -fx-spacing: 6px; }
 .status-bar { -fx-min-height: 24px; -fx-padding: 3px 16px; -fx-background-color: -app-surface; }
 .status-bar .label { -fx-text-fill: -app-muted; -fx-font-size: 10px; }
 

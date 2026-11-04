@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Replaces jpackage's default (empty) overrides.wxi through jpackage resource-dir. main.wxs includes this
+  file before it evaluates JpAllowDowngrades, which jpackage defines for applications by default.
+
+  Undefining it makes the installer refuse to replace a newer installed version with an older one:
+  a newer version may already have migrated the user's database, which an older version would refuse
+  to open. Upgrades (JpAllowUpgrades) stay enabled.
+-->
+<Include xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?ifdef JpAllowDowngrades ?>
+  <?undef JpAllowDowngrades?>
+  <?endif?>
+</Include>
