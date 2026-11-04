@@ -15,6 +15,12 @@ public final class Main {
     private Main() { }
 
     public static void main(String[] args) {
+        if (Arrays.asList(args).contains(AppUninstaller.ARGUMENT)) {
+            // Runs from the installation folder that msiexec removes; keep native caches in the temp folder.
+            RuntimeLocations.configureTemporary(Path.of(System.getProperty("java.io.tmpdir")));
+            Application.launch(UninstallApplication.class);
+            return;
+        }
         if (Arrays.asList(args).contains(UserDataRemoval.ARGUMENT)) {
             // Removal must not load native caches from the directory it is about to delete.
             RuntimeLocations.configureTemporary(Path.of(System.getProperty("java.io.tmpdir")));

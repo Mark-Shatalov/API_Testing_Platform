@@ -65,23 +65,62 @@ public final class ApiTestingPlatformApplication extends Application {
     public void start(Stage stage) {
         StartupConfiguration configuration = StartupConfiguration.defaults();
 
+        // An ordinary Windows window: title bar with minimise, maximise and close, sized to the screen it opens on.
+        stage.initStyle(javafx.stage.StageStyle.DECORATED);
         stage.setTitle(configuration.windowTitle());
-        stage.setMinWidth(configuration.minimumWidth());
-        stage.setMinHeight(configuration.minimumHeight());
+        addIcons(stage);
+        javafx.geometry.Rectangle2D area = startupScreen().getVisualBounds();
+        WindowPlacement placement = WindowPlacement.fit(configuration, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight());
+        stage.setMinWidth(placement.minimumWidth());
+        stage.setMinHeight(placement.minimumHeight());
+        stage.setX(placement.x()); stage.setY(placement.y());
+        stage.setWidth(placement.width()); stage.setHeight(placement.height());
+        stage.setMaximized(placement.maximized());
         controller = new LibraryWindowController(engine, repository);
         controller.setOperations(operations);
         controller.setEventLog(log);
         controller.setOnReady(() -> StartupProbe.ready(stage, controller));
         controller.setAppearanceAction(() -> themes.showSettings(stage));
-        stage.setScene(new Scene(
-                controller.createView(),
-                configuration.initialWidth(),
-                configuration.initialHeight()));
+        stage.setScene(new Scene(controller.createView()));
+        enableFullScreenToggle(stage);
         themes = new ThemeManager(stage.getScene(), appearance, preferences::save);
         stage.setOnCloseRequest(event -> {
             event.consume(); controller.requestWindowClose(stage::hide);
         });
         stage.show();
+    }
+
+    /**
+     * F11 switches between the normal window and full screen, as in browsers. Escape keeps its existing
+     * meaning in the app (for example clearing the library search), so it does not leave full screen.
+     */
+    static void enableFullScreenToggle(Stage stage) {
+        stage.setFullScreenExitKeyCombination(javafx.scene.input.KeyCombination.NO_MATCH);
+        stage.setFullScreenExitHint("Press F11 to leave full screen");
+        stage.getScene().addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+            if (event.getCode() == javafx.scene.input.KeyCode.F11 && !event.isShortcutDown() && !event.isAltDown()) {
+                stage.setFullScreen(!stage.isFullScreen());
+                event.consume();
+            }
+        });
+    }
+
+    /** The screen under the mouse pointer, so the window opens where the user launched it. */
+    private static javafx.stage.Screen startupScreen() {
+        try {
+            javafx.geometry.Point2D pointer = new javafx.scene.robot.Robot().getMousePosition();
+            var screens = javafx.stage.Screen.getScreensForRectangle(pointer.getX(), pointer.getY(), 1, 1);
+            if (!screens.isEmpty()) return screens.getFirst();
+        } catch (RuntimeException unavailable) { /* fall back to the primary screen */ }
+        return javafx.stage.Screen.getPrimary();
+    }
+
+    static void addIcons(Stage stage) {
+        for (int size : new int[]{16, 24, 32, 48, 64, 128, 256}) {
+            try (var icon = ApiTestingPlatformApplication.class.getResourceAsStream("icon-" + size + ".png")) {
+                if (icon != null) stage.getIcons().add(new javafx.scene.image.Image(icon));
+            } catch (java.io.IOException ignored) { /* the default icon remains */ }
+        }
     }
 
     @Override public void stop() {

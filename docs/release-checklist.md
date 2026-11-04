@@ -5,7 +5,7 @@
 | What | Location | Install | Upgrade | Uninstall |
 | --- | --- | --- | --- | --- |
 | Application, bundled Java runtime, libraries | `C:\Program Files\API Testing Platform` (or the folder chosen during setup) | created | replaced | removed |
-| Start menu: *API Testing Platform*, *Remove API Testing Platform Data*; optional desktop shortcut | Start menu group *API Testing Platform* | created | replaced | removed |
+| Start menu: *API Testing Platform*, *Remove API Testing Platform Data*, *Uninstall API Testing Platform*; optional desktop shortcut | Start menu group *API Testing Platform* | created | replaced | removed |
 | SQLite database, WAL/SHM, instance lock | `%LOCALAPPDATA%\API Testing Platform\platform.sqlite*` | created at first start | kept, migrated at next start | **kept** |
 | Migration, restore-safety and pre-restore backups | `%LOCALAPPDATA%\API Testing Platform\migration-backups`, `recovery-backups` | as needed | kept | **kept** |
 | Logs | `%LOCALAPPDATA%\API Testing Platform\logs` | created | kept | **kept** |
@@ -29,7 +29,7 @@ Encrypted request payloads and secrets are bound to the Windows user profile (DP
    powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\windows\Invoke-ReleaseValidation.ps1
    ```
    It runs every automated test (`mvnw.cmd clean verify`), builds and smoke-tests the app image, builds the MSI and a next-patch MSI, and runs the elevated install/upgrade/downgrade/uninstall test with a temporary `LOCALAPPDATA`. Every step must be PASS. Results: `packaging\target\release-validation\summary.md`.
-4. **Validate on clean Windows** — a Windows Sandbox (`Start-SandboxValidation.ps1`), a fresh VM, or the CI `installer` job (push a `v*` tag or run the workflow manually). Then complete the manual checklist below on that clean machine.
+4. **Validate on clean Windows** — a Windows Sandbox (`Start-SandboxValidation.ps1`), a fresh VM, or another Windows PC without Java (`Test-Installer.ps1`, elevated). Then complete the manual checklist below on that clean machine.
 5. **Publish** `dist\API Testing Platform-<version>.msi` together with `SHA256SUMS.txt`. Keep `build-info.json` with the release notes. The MSI is not code-signed; Windows SmartScreen may warn until a signing certificate is used (`signtool sign` on the MSI before computing checksums).
 6. **Tag** the release commit `v<version>` and bump the development version to the next `-SNAPSHOT`.
 
@@ -42,7 +42,7 @@ Automated checks (`Test-Installer.ps1`, `Test-AppImage.ps1`) cover the items mar
 - [ ] **A** `msiexec` installs silently with exit code 0; interactive setup shows the folder chooser and desktop-shortcut prompt.
 - [ ] **A** One *API Testing Platform* entry in **Settings → Apps** with the expected version; upgrade code `74c383b2-1e8b-4a5e-8d88-e2eaae645a1b`.
 - [ ] **A** `C:\Program Files\API Testing Platform` contains the launcher, `runtime` (Java 25) and `app\mods`.
-- [ ] **A** Start menu contains *API Testing Platform* and *Remove API Testing Platform Data*.
+- [ ] **A** Start menu contains *API Testing Platform*, *Remove API Testing Platform Data* and *Uninstall API Testing Platform*.
 - [ ] Desktop shortcut exists only when chosen; the icon is shown in the Start menu, taskbar and Apps list.
 - [ ] Windows Defender/SmartScreen behaviour is noted (unsigned MSI).
 
@@ -64,6 +64,7 @@ Automated checks (`Test-Installer.ps1`, `Test-AppImage.ps1`) cover the items mar
 ### Uninstall
 
 - [ ] **A** Uninstalling from **Settings → Apps** or `msiexec /x` removes Program Files content and shortcuts.
+- [ ] *Uninstall API Testing Platform* → Cancel changes nothing; → **Uninstall** asks for administrator permission and removes the app; with the data checkbox ticked it also deletes `%LOCALAPPDATA%\API Testing Platform`.
 - [ ] **A** `%LOCALAPPDATA%\API Testing Platform` is preserved; reinstalling shows the existing data.
 - [ ] *Remove API Testing Platform Data* while the app is open reports that it is running and removes nothing.
 - [ ] *Remove API Testing Platform Data* → Cancel removes nothing; → **Remove data** deletes only `%LOCALAPPDATA%\API Testing Platform`.

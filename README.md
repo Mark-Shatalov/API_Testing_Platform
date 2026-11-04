@@ -47,7 +47,7 @@ The development build requires Java 25. `javafx:run` uses the same entry point a
 
 ## Install on Windows
 
-The MSI from `packaging\windows\Build-Installer.ps1` installs into `C:\Program Files\API Testing Platform` with its own Java 25 runtime; no JDK, JRE, server or service is needed on the user's computer. Data, backups, logs, settings and native-library caches stay in `%LOCALAPPDATA%\API Testing Platform`, outside the installation folder. Installing a newer version upgrades in place and keeps that data; uninstalling also keeps it. To delete it, run **Start → API Testing Platform → Remove API Testing Platform Data** and confirm.
+The MSI from `packaging\windows\Build-Installer.ps1` installs into `C:\Program Files\API Testing Platform` with its own Java 25 runtime; no JDK, JRE, server or service is needed on the user's computer. Data, backups, logs, settings and native-library caches stay in `%LOCALAPPDATA%\API Testing Platform`, outside the installation folder. Installing a newer version upgrades in place and keeps that data; uninstalling also keeps it. To uninstall, run **Start → API Testing Platform → Uninstall API Testing Platform** (tick *Also delete my saved requests…* to remove your data too) or use Windows Settings → Apps. To delete only the data, run **Remove API Testing Platform Data**.
 
 ```powershell
 .\packaging\windows\Install-WixToolset.ps1      # once per build machine (.NET 8 SDK required)
@@ -57,6 +57,8 @@ The MSI from `packaging\windows\Build-Installer.ps1` installs into `C:\Program F
 Building, release steps and the installer validation checklist: [packaging/README.md](packaging/README.md), [release checklist](docs/release-checklist.md), [Step 19 packaging](docs/step-19-packaging.md) and [Step 20 release validation](docs/step-20-release-validation.md).
 
 ## Finding your way around
+
+The main window opens on the screen under the mouse pointer, sized to fit it (maximized on small or high-scaling screens), with the normal Windows minimize, maximize and close buttons. **F11** switches full screen on and off.
 
 Start with **New request**, enter an HTTP(S) URL and click **Send**. A blank request offers **Use a sample GET request**, which fills a public example URL without sending it. Request options appear after you start editing; hover over a tab to see what it does. The response appears below, with search and save tools available once a response is ready. Validation errors open the section that needs attention.
 

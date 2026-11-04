@@ -11,6 +11,8 @@ module dev.apitestingplatform.app {
     requires dev.apitestingplatform.persistence.sqlite;
     requires dev.apitestingplatform.security.windows;
     requires dev.apitestingplatform.importexport;
+    requires com.sun.jna;
+    requires com.sun.jna.platform;
     exports dev.apitestingplatform.app;
 }
 

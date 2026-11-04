@@ -6,7 +6,7 @@
     <parent>
         <groupId>dev.apitestingplatform</groupId>
         <artifactId>api-testing-platform</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>0.2.0-SNAPSHOT</version>
     </parent>
     <artifactId>app</artifactId>
     <name>API Testing Platform - App</name>
@@ -40,6 +40,11 @@
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-controls</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Registry lookup for the Start-menu uninstaller. -->
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
         </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>

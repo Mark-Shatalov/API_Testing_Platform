@@ -31,6 +31,7 @@ function Get-InstallerSettings([string]$Root) {
         JavaOptions    = Get-XmlText $properties 'installer.javaOptions'
         ProjectVersion = Get-XmlText $parent.DocumentElement 'version'
         RemoveLauncher = 'Remove API Testing Platform Data'
+        UninstallLauncher = 'Uninstall API Testing Platform'
     }
 }
 

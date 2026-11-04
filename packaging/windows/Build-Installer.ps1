@@ -123,6 +123,14 @@ $removeProperties = Join-Path $work 'remove-user-data.properties'
     'win-menu=true'
     'win-shortcut=false'
 ) | Set-Content -LiteralPath $removeProperties -Encoding ASCII
+$uninstallProperties = Join-Path $work 'uninstall.properties'
+@(
+    'arguments=--uninstall'
+    "description=Uninstalls $($settings.Name) after confirmation; optionally deletes this user's data"
+    "icon=$($icon.Replace('\', '/'))"
+    'win-menu=true'
+    'win-shortcut=false'
+) | Set-Content -LiteralPath $uninstallProperties -Encoding ASCII
 
 $common = @(
     '--name', $settings.Name,
@@ -135,14 +143,15 @@ $common = @(
     '--module-path', $modulePath,
     '--module', $settings.MainModule,
     '--java-options', $settings.JavaOptions,
-    '--add-launcher', "$($settings.RemoveLauncher)=$removeProperties"
+    '--add-launcher', "$($settings.RemoveLauncher)=$removeProperties",
+    '--add-launcher', "$($settings.UninstallLauncher)=$uninstallProperties"
 )
 
 $images = New-EmptyDirectory (Join-Path $work 'image')
 Invoke-Checked $jdk.Jpackage (@('--type', 'app-image', '--dest', $images) + $common) 'jpackage app image'
 $image = Join-Path $images $settings.Name
 $launcher = Join-Path $image "$($settings.Name).exe"
-foreach ($required in $launcher, (Join-Path $image "$($settings.RemoveLauncher).exe"), (Join-Path $image 'runtime\release')) {
+foreach ($required in $launcher, (Join-Path $image "$($settings.RemoveLauncher).exe"), (Join-Path $image "$($settings.UninstallLauncher).exe"), (Join-Path $image 'runtime\release')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "The app image is incomplete: $required is missing." }
 }
 $smoke = $null

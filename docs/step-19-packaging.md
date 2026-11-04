@@ -31,12 +31,11 @@
 | `packaging/windows/Invoke-ReleaseValidation.ps1` | One-command release validation (step 20) |
 | `packaging/windows/resources/overrides.wxi` | Disables MSI downgrades |
 | `packaging/windows/Install-WixToolset.ps1`, `Common.ps1`, `runtime-modules.txt`, `app.ico` | Tooling and inputs |
-| `.github/workflows/windows.yml` | CI: verify on every push; MSI build and lifecycle test on a clean runner for tags/manual runs |
 | `docs/release-checklist.md` | Release instructions and installer validation checklist |
 
 ## Verification
 
-Verified on Windows 11 x64 with Temurin JDK 25.0.4.1 and WiX 5.0.2; full results in [Step 20](step-20-release-validation.md): 280 automated tests pass, the packaged app starts without any system Java and writes only below `LOCALAPPDATA`, and the MSI passes 27 of 27 install / upgrade / downgrade-refusal / uninstall checks. A clean-machine run (Sandbox, VM or CI) is still outstanding.
+Verified on Windows 11 x64 with Temurin JDK 25.0.4.1 and WiX 5.0.2; full results in [Step 20](step-20-release-validation.md): 280 automated tests pass, the packaged app starts without any system Java and writes only below `LOCALAPPDATA`, and the MSI passes 27 of 27 install / upgrade / downgrade-refusal / uninstall checks. A clean-machine run (Sandbox, VM or another PC without Java) is still outstanding.
 
 ## Limitations
 

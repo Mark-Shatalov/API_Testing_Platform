@@ -95,10 +95,11 @@ function Test-InstalledVersion([string]$Label, [string]$Version) {
     }
     Add-Check "$Label launcher" (Test-Path -LiteralPath $launcher) $launcher
     Add-Check "$Label data-removal launcher" (Test-Path -LiteralPath (Join-Path $installDirectory "$($settings.RemoveLauncher).exe")) 'explicit user-data removal is available'
+    Add-Check "$Label uninstall launcher" (Test-Path -LiteralPath (Join-Path $installDirectory "$($settings.UninstallLauncher).exe")) 'Start-menu uninstaller is available'
     $mods = @(Get-ChildItem -LiteralPath (Join-Path $installDirectory 'app\mods') -Filter '*.jar' -ErrorAction SilentlyContinue)
     Add-Check "$Label module path" ($mods.Count -gt 10) "$($mods.Count) jars in app\mods"
     $shortcuts = @(Get-Shortcuts)
-    Add-Check "$Label Start menu" (($shortcuts -contains $settings.Name) -and ($shortcuts -contains $settings.RemoveLauncher)) ("shortcuts: " + ($shortcuts -join ', '))
+    Add-Check "$Label Start menu" (($shortcuts -contains $settings.Name) -and ($shortcuts -contains $settings.RemoveLauncher) -and ($shortcuts -contains $settings.UninstallLauncher)) ("shortcuts: " + ($shortcuts -join ', '))
     Add-Check "$Label data outside install directory" (-not (Test-Path -LiteralPath (Join-Path $installDirectory 'platform.sqlite'))) 'no database in Program Files'
 }
 

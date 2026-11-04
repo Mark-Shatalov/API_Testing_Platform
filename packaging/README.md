@@ -42,6 +42,4 @@ The script fails instead of producing a partial installer when the JDK is not 25
 | `Start-SandboxValidation.ps1 -Msi <msi> [-UpgradeMsi <msi>]` | Runs `Test-Installer.ps1` in a disposable Windows Sandbox (clean Windows without Java). Needs Windows Pro/Enterprise and hardware virtualization. |
 | `Invoke-ReleaseValidation.ps1` | One command for release validation: all tests, installer, upgrade-test MSI and the elevated lifecycle test. Summary in `packaging/target/release-validation`. `-LifecycleOnly` reuses the last MSI and repeats only the installer checks. |
 
-The CI workflow `.github/workflows/windows.yml` runs `mvnw.cmd clean verify` on every push and, for `v*` tags or a manual run, builds the MSI and runs `Test-Installer.ps1` on a clean hosted Windows runner.
-
 See [the release instructions and installer validation checklist](../docs/release-checklist.md).
