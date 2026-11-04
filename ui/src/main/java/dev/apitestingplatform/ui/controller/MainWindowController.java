@@ -9,6 +9,7 @@ import dev.apitestingplatform.ui.components.RequestToolbar;
 import dev.apitestingplatform.ui.components.RequestEditor;
 import dev.apitestingplatform.ui.components.ResponsePanel;
 import dev.apitestingplatform.ui.components.WorkspaceSidebar;
+import dev.apitestingplatform.ui.components.UiIcon;
 import dev.apitestingplatform.ui.viewmodel.MainWindowViewModel;
 import dev.apitestingplatform.ui.viewmodel.RequestEditorViewModel;
 import dev.apitestingplatform.application.http.HttpExecutionEngine;
@@ -113,9 +114,7 @@ public final class MainWindowController implements AutoCloseable {
         root.setCenter(horizontalSplit);
         root.setBottom(createStatusBar());
         root.getStyleClass().add("app-root");
-        root.getStylesheets().add(Objects.requireNonNull(
-                MainView.class.getResource("main.css"),
-                "UI stylesheet is missing").toExternalForm());
+        root.getStylesheets().add(MainView.stylesheet());
         return root;
     }
 
@@ -171,10 +170,11 @@ public final class MainWindowController implements AutoCloseable {
         clearSession.managedProperty().bind(clearSession.visibleProperty());
         HBox targetBar = new HBox(10, preview, clearSession, target); targetBar.setAlignment(Pos.CENTER_LEFT); targetBar.getStyleClass().add("target-preview");
         targetBar.visibleProperty().bind(viewModel.requestUrlProperty().isNotEmpty()); targetBar.managedProperty().bind(targetBar.visibleProperty());
-        Label startTitle = new Label("Start with a request"); startTitle.getStyleClass().add("starter-title");
-        Label startHint = new Label("Enter an API URL above and click Send. No collection or environment is needed to try it.");
-        startHint.setWrapText(true); startHint.getStyleClass().add("help-text");
+        Label startTitle = new Label("Send your first request"); startTitle.getStyleClass().add("starter-title");
+        Label startHint = new Label("Enter an API URL above, or try a sample. Save useful requests to a collection.");
+        startHint.setWrapText(true); startHint.setMaxWidth(440); startHint.getStyleClass().add("starter-description");
         Button sample = new Button("Use a sample GET request"); sample.setId("request-use-sample");
+        sample.setGraphic(new UiIcon(UiIcon.Kind.SEND, 15)); sample.getStyleClass().add("sample-button");
         sample.setTooltip(new javafx.scene.control.Tooltip("Fill in a public JSONPlaceholder URL. Click Send when you are ready."));
         sample.setOnAction(event -> {
             if (!draft.capture().equals(RequestDraft.empty())) return;
@@ -182,7 +182,12 @@ public final class MainWindowController implements AutoCloseable {
             viewModel.showMessage("Sample URL added. Click Send to fetch a public example response.");
             toolbar.lookup(".url-input").requestFocus();
         });
-        VBox starter = new VBox(7, startTitle, startHint, sample); starter.setId("request-starter");
+        VBox starterCopy = new VBox(12, startTitle, startHint, sample);
+        javafx.scene.layout.StackPane symbol = new javafx.scene.layout.StackPane(new UiIcon(UiIcon.Kind.CONNECTION, 30));
+        symbol.getStyleClass().add("starter-symbol"); symbol.setMinSize(64, 64); symbol.setMaxSize(64, 64);
+        HBox introduction = new HBox(22, symbol, starterCopy); introduction.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(starterCopy, Priority.ALWAYS);
+        VBox starter = new VBox(introduction); starter.setId("request-starter");
         starter.getStyleClass().add("request-starter");
         boolean emptyDraft = draft.capture().equals(RequestDraft.empty());
         starter.visibleProperty().bind(viewModel.requestUrlProperty().isEmpty().and(draft.dirtyProperty().not())
@@ -201,7 +206,7 @@ public final class MainWindowController implements AutoCloseable {
         responsePanel.setManagedDatabase(managedDatabase);
         SplitPane requestAndResponse = new SplitPane(requestEditor, responsePanel);
         requestAndResponse.setOrientation(Orientation.VERTICAL);
-        requestAndResponse.setDividerPositions(0.55);
+        requestAndResponse.setDividerPositions(0.45);
         requestAndResponse.getStyleClass().add("workspace-split");
 
         BorderPane content = new BorderPane(requestAndResponse);
@@ -221,6 +226,8 @@ public final class MainWindowController implements AutoCloseable {
         HBox statusBar = new HBox(8, progress, message);
         statusBar.setAlignment(Pos.CENTER_LEFT);
         statusBar.getStyleClass().add("status-bar");
+        statusBar.visibleProperty().bind(viewModel.statusMessageProperty().isNotEqualTo("Ready"));
+        statusBar.managedProperty().bind(statusBar.visibleProperty());
         return statusBar;
     }
 

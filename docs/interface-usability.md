@@ -1,5 +1,7 @@
 # Interface usability
 
+These notes describe the usability pass. The subsequent visual system and references are documented in [Interface redesign](interface-redesign.md).
+
 ## Design direction
 
 A Windows API workbench with one starting point: enter a URL and send a request.

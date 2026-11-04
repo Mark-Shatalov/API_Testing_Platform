@@ -65,7 +65,7 @@ public final class HistoryWindow implements AutoCloseable {
         VBox report = new VBox(8, summary, stepDetails); VBox.setVgrow(stepDetails, Priority.ALWAYS);
         SplitPane split = new SplitPane(records, report); split.setOrientation(javafx.geometry.Orientation.VERTICAL); split.setDividerPositions(0.32); VBox.setVgrow(split, Priority.ALWAYS);
         VBox root = new VBox(10, actions, retention, note, status, split); root.setId("history-window"); root.setPadding(new Insets(14)); root.getStyleClass().add("app-root");
-        root.getStylesheets().add(Objects.requireNonNull(MainView.class.getResource("main.css")).toExternalForm()); stage.setScene(new Scene(root, 1180, 850)); stage.setOnHidden(event -> close());
+        root.getStylesheets().add(MainView.stylesheet()); stage.setScene(new Scene(root, 1180, 850)); stage.setOnHidden(event -> close());
         repository.historySettings().whenComplete((settings, failure) -> Platform.runLater(() -> { if (!closed && failure == null) { count.getValueFactory().setValue(settings.maxEntries()); days.getValueFactory().setValue(settings.maxAgeDays()); saveRetention.setDisable(false); } }));
     }
     public void show() { if (!closed) { stage.show(); stage.toFront(); refresh(); } }

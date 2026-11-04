@@ -17,5 +17,5 @@ public record Appearance(Theme theme, String accent) {
             throw new IllegalArgumentException("Accent must be a six-digit RGB color");
         accent = accent.toLowerCase(Locale.ROOT);
     }
-    public static Appearance defaults() { return new Appearance(Theme.GRAPHITE, "#818cf8"); }
+    public static Appearance defaults() { return new Appearance(Theme.GRAPHITE, "#8edff3"); }
 }

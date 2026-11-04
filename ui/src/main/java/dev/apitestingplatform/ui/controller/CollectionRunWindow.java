@@ -55,7 +55,7 @@ public final class CollectionRunWindow implements AutoCloseable {
         results.getSelectionModel().selectedItemProperty().addListener((value, before, selected) -> showDetails(selected));
         SplitPane split = new SplitPane(results, details); split.setOrientation(javafx.geometry.Orientation.VERTICAL); split.setDividerPositions(0.7); VBox.setVgrow(split, Priority.ALWAYS);
         VBox root = new VBox(10, context, hint, controls, progress, status, split); root.setPadding(new Insets(14)); root.getStyleClass().add("app-root"); root.setId("collection-run-window");
-        root.getStylesheets().add(Objects.requireNonNull(MainView.class.getResource("main.css")).toExternalForm());
+        root.getStylesheets().add(MainView.stylesheet());
         stage.setScene(new Scene(root, 1160, 780)); stage.setOnHidden(event -> close());
     }
     private static TableColumn<RunEntry, String> column(String title, Function<RunEntry, String> value, double width) {

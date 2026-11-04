@@ -26,7 +26,7 @@ public final class OperationsWindow implements AutoCloseable {
     private final VBox root = new VBox(14); private boolean closed, busy;
     public OperationsWindow(Window owner, AppOperations operations, LibraryRepository repository, Runnable exportWorkspace) {
         this.operations = operations; this.repository = repository; stage.initOwner(owner); stage.setTitle("Settings, backups and diagnostics"); stage.setMinWidth(760); stage.setMinHeight(650);
-        root.setPadding(new Insets(16)); root.setId("operations-content"); root.getStyleClass().add("app-root"); root.getStylesheets().add(Objects.requireNonNull(MainView.class.getResource("main.css")).toExternalForm());
+        root.setPadding(new Insets(16)); root.setId("operations-content"); root.getStyleClass().add("app-root"); root.getStylesheets().add(MainView.stylesheet());
         mode.getItems().setAll(OperationalSettings.ProxyMode.values()); mode.setId("operations-proxy-mode"); mode.setValue(OperationalSettings.ProxyMode.DIRECT);
         host.setId("operations-proxy-host"); host.setPromptText("Proxy hostname or IP, without credentials"); port.setId("operations-proxy-port"); response.setId("operations-response-limit"); certificate.setId("operations-ca-file"); certificate.setPromptText("Optional additional CA certificate bundle (PEM/DER)");
         host.disableProperty().bind(mode.valueProperty().isNotEqualTo(OperationalSettings.ProxyMode.MANUAL)); port.disableProperty().bind(host.disableProperty());

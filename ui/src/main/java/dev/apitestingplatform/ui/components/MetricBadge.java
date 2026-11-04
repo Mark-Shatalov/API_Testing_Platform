@@ -23,6 +23,14 @@ public final class MetricBadge extends HBox {
         setSpacing(6);
         getStyleClass().add("metric-badge");
         getChildren().addAll(nameLabel, valueLabel);
+        if (label.equals("Status")) {
+            Runnable update = () -> {
+                String status = value.getValue() == null ? "" : value.getValue();
+                pseudoClassStateChanged(javafx.css.PseudoClass.getPseudoClass("success"), status.startsWith("2"));
+                pseudoClassStateChanged(javafx.css.PseudoClass.getPseudoClass("failure"), status.startsWith("4") || status.startsWith("5"));
+            };
+            value.addListener(ignored -> update.run()); update.run();
+        }
     }
 }
 

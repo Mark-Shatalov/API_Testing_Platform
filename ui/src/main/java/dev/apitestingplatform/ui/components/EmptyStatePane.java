@@ -7,8 +7,8 @@ import javafx.scene.layout.VBox;
 /** Reusable centered empty-state content for tabs and navigation sections. */
 public final class EmptyStatePane extends VBox {
     public EmptyStatePane(String title, String description) {
-        Label marker = new Label("○");
-        marker.getStyleClass().add("empty-state-marker");
+        javafx.scene.layout.StackPane marker = new javafx.scene.layout.StackPane(new UiIcon(UiIcon.Kind.REQUEST, 22));
+        marker.getStyleClass().add("empty-state-icon"); marker.setMaxSize(32, 32); marker.setMinSize(32, 32);
 
         Label titleLabel = new Label(title);
         titleLabel.getStyleClass().add("empty-state-title");

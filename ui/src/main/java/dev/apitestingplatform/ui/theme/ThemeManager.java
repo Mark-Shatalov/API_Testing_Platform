@@ -23,7 +23,7 @@ import java.util.function.Function;
 public final class ThemeManager implements AutoCloseable {
     private final Scene scene;
     private final Function<Appearance, CompletionStage<Void>> save;
-    private final String stylesheet = Objects.requireNonNull(MainView.class.getResource("main.css")).toExternalForm();
+    private final String stylesheet = MainView.stylesheet();
     private final WeakHashMap<Parent, String> originalStyles = new WeakHashMap<>();
     private final ListChangeListener<Window> windows = change -> {
         while (change.next()) if (change.wasAdded())

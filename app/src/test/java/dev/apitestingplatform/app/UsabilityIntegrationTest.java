@@ -100,13 +100,16 @@ class UsabilityIntegrationTest {
                         "library-clear-temporary", "library-import-workspace", "library-export-workspace",
                         "library-appearance", "library-settings"}) assertThat(menuAction(f.root(), id)).isNotNull();
                 TitledPane options = (TitledPane) f.root().lookup("#environment-options");
+                f.root().applyCss();
+                assertThat(((Label) f.root().lookup("#library-status")).getFont().getFamily()).isEqualTo("Geist");
+                assertThat(f.root().lookup("#library-navigation").isVisible()).isTrue();
                 assertThat(options.isExpanded()).isFalse(); options.setExpanded(true);
                 assertThat(f.root().lookup("#environment-new")).isNotNull(); options.setExpanded(false);
                 AppearanceIntegrationTest.snapshot(f.root(), "usability-starter-graphite");
                 return null;
             });
             for (var theme : Appearance.Theme.values()) {
-                fx(() -> { f.stage.setWidth(1050); f.stage.setHeight(700); f.themes.apply(new Appearance(theme, "#818cf8")); return null; });
+                fx(() -> { f.stage.setWidth(1050); f.stage.setHeight(700); f.themes.apply(new Appearance(theme, Appearance.defaults().accent())); return null; });
                 waitFor(() -> f.stage.getScene().getWidth() <= 1050 && f.stage.getScene().getHeight() <= 700);
                 if (System.getProperty("appearance.snapshots") != null) Thread.sleep(150);
                 fx(() -> {
@@ -122,6 +125,11 @@ class UsabilityIntegrationTest {
                     TableView<?> params = (TableView<?>) f.root().lookup("#params-table");
                     assertThat(params.getHeight()).as("Parameter rows remain usable at the minimum window size").isGreaterThanOrEqualTo(70);
                     assertThat(params.getColumns().getFirst().getWidth()).isLessThanOrEqualTo(52);
+                    Node description = f.root().lookup(".response-panel .empty-state-description");
+                    Node workspace = f.root().lookup("#library-request-tabs");
+                    assertThat(description.localToScene(description.getBoundsInLocal()).getMaxY())
+                            .as("Response instructions remain visible inside the workbench")
+                            .isLessThanOrEqualTo(workspace.localToScene(workspace.getBoundsInLocal()).getMaxY());
                     AppearanceIntegrationTest.snapshot(f.root(), "usability-small-editor-" + theme.name().toLowerCase());
                     draft.load(RequestDraft.empty());
                     return null;

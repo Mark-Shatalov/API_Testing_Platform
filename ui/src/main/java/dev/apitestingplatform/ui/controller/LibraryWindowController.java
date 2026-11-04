@@ -4,6 +4,7 @@ import dev.apitestingplatform.application.http.HttpExecutionEngine;
 import dev.apitestingplatform.application.storage.*;
 import dev.apitestingplatform.domain.storage.*;
 import dev.apitestingplatform.ui.MainView;
+import dev.apitestingplatform.ui.components.UiIcon;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Pos;
@@ -108,13 +109,17 @@ public final class LibraryWindowController implements AutoCloseable {
                 if (initializedTab && after != null) activateWorkspaceTab(after.id());
             }
         });
-        tree.setId("library-tree"); tree.setFixedCellSize(28); tree.setShowRoot(false); tree.getRoot().setExpanded(true);
+        tree.setId("library-tree"); tree.setFixedCellSize(32); tree.setShowRoot(false); tree.getRoot().setExpanded(true);
+        tree.setAccessibleText("Saved collections, folders and requests");
         tree.setCellFactory(view -> new TreeCell<>() {
             @Override protected void updateItem(LibraryItem item, boolean empty) {
                 super.updateItem(item, empty);
-                setText(empty || item == null ? null : switch (item.kind()) {
-                    case COLLECTION -> "Collection: "; case FOLDER -> "Folder: "; case REQUEST -> ""; case WORKSPACE -> "";
-                } + item.name());
+                boolean present = !empty && item != null;
+                setText(present ? item.name() : null);
+                setGraphic(present ? new UiIcon(item.kind() == LibraryItem.Kind.REQUEST ? UiIcon.Kind.REQUEST : UiIcon.Kind.FOLDER, 15) : null);
+                setAccessibleText(present ? item.kind().name().toLowerCase(Locale.ROOT) + " " + item.name() : null);
+                getStyleClass().removeAll("collection-cell", "folder-cell", "request-cell");
+                if (present) getStyleClass().add(item.kind().name().toLowerCase(Locale.ROOT) + "-cell");
             }
         });
         tree.setOnMouseClicked(event -> { if (event.getClickCount() == 2) openSelected(); });
@@ -122,13 +127,18 @@ public final class LibraryWindowController implements AutoCloseable {
         workspaces.getStyleClass().add("workspace-selector");
         workspaces.setAccessibleText("Current workspace");
         Label collectionsTitle = new Label("Collections"); collectionsTitle.getStyleClass().add("navigation-title");
+        collectionsTitle.getStyleClass().add("collections-title");
         Button newCollection = button("New collection", "library-new-collection", () -> create(LibraryItem.Kind.COLLECTION));
+        newCollection.setGraphic(new UiIcon(UiIcon.Kind.PLUS, 14));
         MenuButton add = menu("Add", "library-add-menu",
                 action("Saved request…", "library-new-request", () -> create(LibraryItem.Kind.REQUEST)),
                 action("Folder…", "library-new-folder", () -> create(LibraryItem.Kind.FOLDER)));
         HBox creation = new HBox(6, newCollection, add);
         search.setId("library-search"); search.setPromptText("Find saved requests…");
         search.setAccessibleText("Find collections, folders and requests by name");
+        search.setMinWidth(0); HBox.setHgrow(search, Priority.ALWAYS);
+        HBox searchBox = new HBox(8, new UiIcon(UiIcon.Kind.SEARCH, 16), search);
+        searchBox.setAlignment(Pos.CENTER_LEFT); searchBox.getStyleClass().add("library-search-box");
         search.textProperty().addListener((observable, before, after) -> populateTree());
         search.setOnKeyPressed(event -> { if (event.getCode() == KeyCode.ESCAPE) { search.clear(); event.consume(); } });
         Button open = button("Open", "library-open", this::openSelected);
@@ -136,11 +146,13 @@ public final class LibraryWindowController implements AutoCloseable {
                 () -> tree.getSelectionModel().getSelectedItem() == null
                         || tree.getSelectionModel().getSelectedItem().getValue().kind() != LibraryItem.Kind.REQUEST,
                 tree.getSelectionModel().selectedItemProperty()));
+        open.visibleProperty().bind(open.disableProperty().not()); open.managedProperty().bind(open.visibleProperty());
         MenuButton organize = menu("Organize", "library-organize-menu",
                 action("Rename…", "library-rename", this::rename), action("Delete…", "library-delete", this::delete),
                 new SeparatorMenuItem(), action("Move up", "library-up", () -> reorder(-1)),
                 action("Move down", "library-down", () -> reorder(1)));
         organize.disableProperty().bind(tree.getSelectionModel().selectedItemProperty().isNull());
+        organize.visibleProperty().bind(organize.disableProperty().not()); organize.managedProperty().bind(organize.visibleProperty());
         FlowPane actions = new FlowPane(6, 6, open,
                 button("Run collection…", "library-run-collection", this::runSelectedCollection), organize);
         Label hint = new Label("Double-click a saved request to open it. Collections group requests you can run together."); hint.setWrapText(true);
@@ -153,23 +165,30 @@ public final class LibraryWindowController implements AutoCloseable {
         empty.setMinHeight(Region.USE_PREF_SIZE);
         empty.visibleProperty().bind(javafx.beans.binding.Bindings.isEmpty(tree.getRoot().getChildren())); empty.managedProperty().bind(empty.visibleProperty());
         Label workspaceTitle = new Label("Workspace"); workspaceTitle.getStyleClass().add("navigation-title");
-        VBox sidebar = new VBox(10, workspaceTitle, workspaces, environments, collectionsTitle, creation, search, empty, tree, actions, hint);
-        sidebar.getStyleClass().add("library-sidebar"); sidebar.setMinWidth(280); sidebar.setPrefWidth(310);
+        VBox sidebar = new VBox(12, workspaceTitle, workspaces, environments, collectionsTitle, creation, searchBox, empty, tree, actions, hint);
+        sidebar.getStyleClass().add("library-sidebar"); sidebar.setMinWidth(260); sidebar.setPrefWidth(280);
         VBox.setVgrow(tree, Priority.ALWAYS);
         tabs.setId("library-request-tabs"); tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
         tabs.getStyleClass().add("request-tabs");
+        tabs.getStyleClass().add("workbench-surface");
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle();
+        clip.widthProperty().bind(tabs.widthProperty()); clip.heightProperty().bind(tabs.heightProperty());
+        clip.setArcWidth(28); clip.setArcHeight(28); tabs.setClip(clip);
         tabs.getSelectionModel().selectedItemProperty().addListener((observable, before, selected) -> {
             if (selected != null && selected.getUserData() instanceof Entry entry) {
                 LibraryItem workspace = byId(entry.workspaceId);
                 if (workspace != null && !workspace.equals(workspaces.getValue())) workspaces.setValue(workspace);
             }
         });
-        SplitPane split = new SplitPane(sidebar, tabs); split.setDividerPositions(0.24);
+        SplitPane split = new SplitPane(sidebar, tabs); split.setDividerPositions(0.22);
+        split.getStyleClass().add("library-split");
         Label brand = new Label("API Testing Platform"); brand.getStyleClass().add("workbench-brand");
         Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
         Button newRequest = button("New request", "library-new-tab", this::newTab);
+        newRequest.setGraphic(new UiIcon(UiIcon.Kind.PLUS, 15));
         newRequest.setTooltip(new Tooltip("Open a new request tab (Ctrl+N). Save it to a collection when ready."));
         Button save = button("Save", "library-save", this::saveActive);
+        save.setGraphic(new UiIcon(UiIcon.Kind.SAVE, 15));
         save.setTooltip(new Tooltip("Save the current request to a collection (Ctrl+S)"));
         MenuButton workspaceMenu = menu("Workspace", "library-workspace-actions",
                 action("New workspace…", "library-new-workspace", () -> create(LibraryItem.Kind.WORKSPACE)),
@@ -185,8 +204,9 @@ public final class LibraryWindowController implements AutoCloseable {
         MenuButton settings = menu("Settings", "library-preferences-menu",
                 action("Appearance…", "library-appearance", () -> appearanceAction.run()),
                 action("Network, backups and diagnostics…", "library-settings", this::showSettings));
-        HBox toolbar = new HBox(8, brand, spacer, newRequest, save,
-                button("History…", "library-history", this::showHistory), workspaceMenu, tools, settings);
+        Label local = new Label("Local"); local.getStyleClass().add("local-indicator");
+        local.setTooltip(new Tooltip("Workspaces and requests are stored on this computer."));
+        HBox toolbar = new HBox(10, brand, local, spacer, newRequest, save, workspaceMenu, tools);
         toolbar.setAlignment(Pos.CENTER_LEFT);
         recoveryStatus.setId("library-autosave-status"); recoveryStatus.getStyleClass().add("draft-status");
         toolbar.getStyleClass().add("library-toolbar");
@@ -194,8 +214,24 @@ public final class LibraryWindowController implements AutoCloseable {
         Region statusSpacer = new Region(); HBox.setHgrow(statusSpacer, Priority.ALWAYS);
         HBox statusBar = new HBox(12, status, statusSpacer, recoveryStatus); statusBar.setAlignment(Pos.CENTER_LEFT);
         statusBar.getStyleClass().add("library-status-bar");
-        root = new BorderPane(split, toolbar, null, statusBar, null); root.getStyleClass().add("app-root");
-        root.getStylesheets().add(Objects.requireNonNull(MainView.class.getResource("main.css")).toExternalForm());
+        Button library = button("Library", "library-nav", () -> search.requestFocus());
+        library.setGraphic(new UiIcon(UiIcon.Kind.LIBRARY, 21)); library.setContentDisplay(ContentDisplay.TOP);
+        library.getStyleClass().addAll("rail-action", "rail-action-selected");
+        library.setTooltip(new Tooltip("Collections and saved requests")); library.setAccessibleText("Request library");
+        Button historyButton = button("History", "library-history", this::showHistory);
+        historyButton.setGraphic(new UiIcon(UiIcon.Kind.HISTORY, 21)); historyButton.setContentDisplay(ContentDisplay.TOP);
+        historyButton.getStyleClass().add("rail-action"); historyButton.setTooltip(new Tooltip("View request and collection run history"));
+        settings.setGraphic(new UiIcon(UiIcon.Kind.SETTINGS, 21)); settings.setContentDisplay(ContentDisplay.TOP);
+        settings.getStyleClass().add("rail-action"); settings.setAccessibleText("Settings and appearance");
+        settings.setTooltip(new Tooltip("Appearance, network settings, backups and diagnostics"));
+        settings.setPopupSide(javafx.geometry.Side.RIGHT);
+        Region railSpacer = new Region(); VBox.setVgrow(railSpacer, Priority.ALWAYS);
+        StackPane mark = new StackPane(new UiIcon(UiIcon.Kind.CONNECTION, 24)); mark.getStyleClass().add("product-mark");
+        VBox rail = new VBox(12, mark, library, historyButton, railSpacer, settings);
+        rail.setId("library-navigation"); rail.getStyleClass().add("navigation-rail"); rail.setAlignment(Pos.TOP_CENTER);
+        BorderPane frame = new BorderPane(split, toolbar, null, statusBar, null);
+        root = new BorderPane(frame, null, null, null, rail); root.getStyleClass().add("app-root");
+        root.getStylesheets().add(MainView.stylesheet());
         root.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.isShortcutDown() && event.getCode() == KeyCode.S) { saveActive(); event.consume(); }
             else if (event.isShortcutDown() && event.getCode() == KeyCode.N) { newTab(); event.consume(); }
@@ -245,7 +281,7 @@ public final class LibraryWindowController implements AutoCloseable {
                 .orElse(workspaces.getItems().isEmpty() ? null : workspaces.getItems().getFirst()));
         updating = false; populateTree();
         environments.setWorkspace(workspaces.getValue() == null ? null : workspaces.getValue().id());
-        status.getStyleClass().removeAll("validation-error"); status.setText("Ready. Enter a URL to send a request; save it to keep it in a collection.");
+        status.getStyleClass().removeAll("validation-error"); status.setText("Workspace ready");
         if (!initializedTab && workspaces.getValue() != null) { initializedTab = true; newTab(); }
         if (!readyReported) { readyReported = true; Platform.runLater(readyAction); }
     }

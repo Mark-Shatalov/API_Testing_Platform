@@ -51,9 +51,11 @@ Start with **New request**, enter an HTTP(S) URL and click **Send**. A blank req
 
 To keep a request, create a **New collection** in the sidebar and click **Save** (Ctrl+S). **Find saved requests…** searches collections, folders and requests by name while keeping their hierarchy visible; Escape clears the search. Use **Add** for saved requests and folders, and **Organize** for renaming, deleting and ordering the selected item.
 
-**Workspace** contains workspace creation, management, import and export. **Tools** contains Save as, refresh, recovery and temporary-variable actions. **Settings** contains appearance and network, backup and diagnostic settings. **History…** stays directly accessible. The environment selector remains visible; expand **Environment options** to create or edit environments and workspace variables.
+**Workspace** contains workspace creation, management, import and export. **Tools** contains Save as, refresh, recovery and temporary-variable actions. The left navigation rail contains **Library**, **History** and **Settings**. Settings contains appearance and network, backup and diagnostic settings. The environment selector remains visible; expand **Environment options** to create or edit environments and workspace variables.
 
 ## Appearance
+
+The workbench uses a near-black canvas, a framed editing surface, rounded controls and a cyan default accent, inspired by Dotify and Liner. Geist is bundled with its open font license and works offline; code uses Consolas. The light theme follows the same layout, with darker focus indicators for contrast. Existing saved theme and accent preferences are preserved. See [the visual design notes](docs/interface-redesign.md).
 
 Use **Settings → Appearance…** to select **Dark graphite** (the default) or **Light** and choose an accent color. Changes preview immediately across the workspace, response viewer and application dialogs. **Save** keeps the selection for future launches; **Cancel** restores the previous appearance. **Reset to defaults** previews the original graphite palette, which can then be saved.
 
@@ -149,7 +151,7 @@ See [Step 14 implementation and verification](docs/step-14-collection-runner.md)
 
 ## Execution history and reports
 
-Use **History…** in the top toolbar after Send or Run collection. Request attempts include validation/network failures and cancellation; collection records include per-step outcomes and partial/cancelled progress. Select a record to reopen its report, then select a request row to inspect check/extraction outcomes. **Refresh** reloads the latest records, including completed runs whose runner window is closed.
+Use **History** in the left navigation after Send or Run collection. Request attempts include validation/network failures and cancellation; collection records include per-step outcomes and partial/cancelled progress. Select a record to reopen its report, then select a request row to inspect check/extraction outcomes. **Refresh** reloads the latest records, including completed runs whose runner window is closed.
 
 History keeps request identity/name, HTTP status, duration, captured size, classified network errors and assertion/extraction outcomes. Headers, bodies, URLs, runtime variables and compared expected/actual values are omitted. Rule details have a global 2 MiB admission budget per report; counts remain complete when details are omitted. Payloads use current-user DPAPI; history IDs/times/kinds/status/counts remain ordinary SQLite metadata. The normal response viewer and Save Response continue to show/save actual server data.
 

@@ -23,6 +23,7 @@ public final class RequestToolbar extends HBox {
                 FXCollections.observableArrayList(HttpMethodOption.values()));
         methodSelector.valueProperty().bindBidirectional(viewModel.requestMethodProperty());
         methodSelector.setPrefWidth(112);
+        methodSelector.setMinWidth(96);
         methodSelector.getStyleClass().add("method-selector");
         methodSelector.setAccessibleText("HTTP method");
         methodSelector.setTooltip(new Tooltip("GET reads data. Use POST or PUT when sending a request body."));
@@ -48,6 +49,7 @@ public final class RequestToolbar extends HBox {
                 viewModel.requestUrlProperty(),
                 viewModel.operationInProgressProperty()));
         sendButton.getStyleClass().add("send-button");
+        sendButton.setGraphic(new UiIcon(UiIcon.Kind.SEND, 16));
         sendButton.setTooltip(new Tooltip("Send this request and view the response below"));
 
         Button cancelButton = new Button("Cancel");

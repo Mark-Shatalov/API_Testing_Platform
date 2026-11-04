@@ -73,7 +73,7 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
     public ResponsePanel(MainWindowViewModel viewModel) {
         this.viewModel = viewModel;
         getStyleClass().add("response-panel");
-        setMinHeight(260);
+        setMinHeight(230);
         Label title = new Label("Response");
         title.getStyleClass().add("panel-title");
         FlowPane metadata = new FlowPane(8, 6,
@@ -82,6 +82,9 @@ public final class ResponsePanel extends VBox implements AutoCloseable {
                 new MetricBadge("Size", viewModel.responseSizeProperty()),
                 new MetricBadge("Content type", contentType));
         HBox.setHgrow(metadata, Priority.ALWAYS);
+        metadata.getStyleClass().add("response-metadata");
+        metadata.visibleProperty().bind(state.isNotEqualTo(ResponseState.EMPTY));
+        metadata.managedProperty().bind(metadata.visibleProperty());
         HBox heading = new HBox(14, title, metadata);
         heading.setAlignment(Pos.CENTER_LEFT);
         heading.getStyleClass().add("response-header");
